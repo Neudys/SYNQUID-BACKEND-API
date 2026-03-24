@@ -1,0 +1,46 @@
+## ASP.NET Core / .NET
+bin/
+obj/
+publish/
+out/
+
+## Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.csproj.user
+
+## Rider / JetBrains
+.idea/
+
+## VS Code
+.vscode/
+
+## NuGet
+*.nupkg
+**/packages/
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+
+## User secrets
+appsettings.Development.json
+appsettings.Local.json
+secrets.json
+
+## Docker
+docker-compose.override.yml
+
+## OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## Logs
+*.log
+logs/
