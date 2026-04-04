@@ -49,20 +49,31 @@ public class AttendanceController : ControllerBase
     public async Task<ActionResult> Register([FromBody] RegisterRequest request)
     {
 
-        List<User> users = await _context.Users.ToListAsync();
+        Guid moduleUid = Guid.Parse(request.ModuleUid);
+        Guid cardUid = Guid.Parse(request.Uuid);
 
-        if (users.Any(u => u.Email == request.Email))
+        Device device = await _context.Devices.FirstOrDefaultAsync(d => d.Id == moduleUid);
+        if (device == null) return NotFound("Dispositivo no encontrado");
+
+        NfcCard card = await _context.NfcCards.FirstOrDefaultAsync(c => c.Id == cardUid);
+        if (card == null) return NotFound("Tarjeta no encontrada");
+
+        User user = await _context.Users .FirstOrDefaultAsync(u => u.InstitutionId == device.InstitutionId);
+        if (user == null) return NotFound("Usuario no encontrado en el instituto a quien le pertenece el dispositivo");
+
+        _context.AttendanceRecords.Add(new AttendanceRecord
         {
-            return BadRequest(new
-            {
-                message = "El correo ya está registrado"
-            });
-        } 
+            UserId = user.Id,
+            DeviceId = device.Id,
+            TimestampUtc = request.date
+        });
+
+        await _context.SaveChangesAsync();
 
         return Ok(new
         {
             found = true,
-            message = "Tarjeta encontrada"
+            message = "Tarjeta registrada correctamente"
         });
     }
 
@@ -76,7 +87,8 @@ public class CheckRequest
 
 public class RegisterRequest
 {
-    public string Uid { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public string password { get; set; } = string.Empty;
+    public string Uuid { get; set; } = string.Empty;
+    public string ModuleUid { get; set; } = string.Empty;
+    public DateTime date { get; set; } = DateTime.Now;
+
 }
