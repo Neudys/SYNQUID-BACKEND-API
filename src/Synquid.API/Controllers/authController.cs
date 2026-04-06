@@ -119,6 +119,7 @@ public class authController : ControllerBase
             return BadRequest("Error fatal porfavor comuniquece con su proveedor");
         }
 
+
         return Ok(new
         {
             errorCode = 0,
