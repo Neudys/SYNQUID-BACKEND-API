@@ -66,7 +66,6 @@ public class AttendanceController : ControllerBase
         if (!user.IsActive) return BadRequest("El usuario asociado a esta tarjeta no está activo");
         if (user.InstitutionId != device.InstitutionId) return BadRequest("El usuario no pertenece a la institución de este dispositivo");
 
-
         _context.AttendanceRecords.Add(new AttendanceRecord
         {
             UserId = user.Id,
@@ -93,7 +92,6 @@ public class AttendanceController : ControllerBase
 
 }
 
-// El objeto que recibe del body
 public class CheckRequest
 {
     public string Uid { get; set; } = string.Empty;
