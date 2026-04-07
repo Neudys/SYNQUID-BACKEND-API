@@ -14,12 +14,12 @@ namespace Synquid.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class authController : ControllerBase
+public class AuthController : ControllerBase
 {
     private readonly SynquidDbContext _context;
     private readonly IConfiguration _config;
 
-    public authController(SynquidDbContext context, IConfiguration config)
+    public AuthController(SynquidDbContext context, IConfiguration config)
     {
         _context = context;
         _config = config;
@@ -54,7 +54,7 @@ public class authController : ControllerBase
     [HttpPost("login")]
     public async Task<ActionResult> Login([FromBody] _RequestLogin login) 
     {
-        User user = await _context.Users.FirstOrDefaultAsync(x => x.Email == login.email);
+        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Email == login.email);
         if (user == null) return NotFound("Usuario no encontrado");
         bool valid = BCrypt.Net.BCrypt.Verify(login.password, user.PasswordHash);
         if (!valid) return Unauthorized("Contraseña incorrecta");
@@ -70,6 +70,7 @@ public class authController : ControllerBase
         });
     }
 
+
     [HttpPost("logout")]
     public async Task<ActionResult> logout() 
     {
@@ -77,7 +78,6 @@ public class authController : ControllerBase
         ClaimsPrincipal principal = ValidateToken(authHeader);
         string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
 
-        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(userId ?? ""));
 
         return Ok(new
         {
@@ -89,27 +89,29 @@ public class authController : ControllerBase
 
 
     [HttpPost("refresh")]
-    public IActionResult Refresh([FromBody] string token)
+    public IActionResult Refresh([FromBody] refreshToken r)
     {
-        var principal = ValidateToken(token);
+        ClaimsPrincipal principal = ValidateToken(r.token);
 
         if (principal == null)
             return Unauthorized("Token inválido o expirado");
 
-        var userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-        var user = _context.Users.Find(Guid.Parse(userId));
+        string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        User? user = _context.Users.Find(Guid.Parse(userId ?? ""));
 
         if (user == null)
             return NotFound();
 
-        var newToken = CreateToken(user);
+        string newToken = CreateToken(user);
         return Ok(new { token = newToken });
     }
 
     [HttpPost("forgotPassword")]
-    public async Task<ActionResult> changePassword([FromBody] ForgotPasswordRequest forgotPasswordRequest)
+    public async Task<ActionResult> forgotPassword([FromBody] ForgotPasswordRequest forgotPasswordRequest)
     {
         User? user = await _context.Users.FirstOrDefaultAsync(x => x.Email == forgotPasswordRequest.Email);
+
+
         if (user == null) return NotFound("El usuario no se encontro");
         try {
             await SendMail(forgotPasswordRequest.Email, "Cambio de contraseña", "CAMBIO WASAAAA!!!");
@@ -119,6 +121,33 @@ public class authController : ControllerBase
             return BadRequest("Error fatal porfavor comuniquece con su proveedor");
         }
 
+
+        return Ok(new
+        {
+            errorCode = 0,
+            message = "Email enviado correctamente",
+            timestamp = DateTime.UtcNow,
+        });
+    }
+
+    public async Task<ActionResult> changePassword([FromBody] requestChangePassword r) 
+    {
+        ClaimsPrincipal principal = ValidateToken(r.token);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        User? user = _context.Users.Find(Guid.Parse(userId ?? ""));
+
+        if (user == null) return NotFound();
+
+        bool valid = BCrypt.Net.BCrypt.Verify(r.oldPassword, user.PasswordHash);
+        if (!valid) return Unauthorized("Contraseña incorrecta");
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(r.newPassword);
+
+        await _context.SaveChangesAsync();
 
         return Ok(new
         {
@@ -221,6 +250,20 @@ public class ForgotPasswordRequest
 {
     public string Email { get; set; }
 }
+
+public class requestChangePassword
+{
+    public string token { get; set; } = string.Empty;
+    public string newPassword { get; set; } = string.Empty;
+    public string oldPassword { get; set; } = string.Empty;
+}
+
+public class refreshToken
+{
+    public string token { get; set; } = string.Empty;
+
+}
+
 public class _RequestLogin 
 {
     public string email { get; set; } = string.Empty;

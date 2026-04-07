@@ -30,7 +30,7 @@ public class InstitutionsController : ControllerBase
     [HttpGet("{id}")]
     public async Task<ActionResult<Institution>> GetById(Guid id)
     {
-        var institution = await _context.Institutions.FindAsync(id);
+        Institution? institution = await _context.Institutions.FindAsync(id);
         if (institution == null) return NotFound();
         return institution;
     }
@@ -52,7 +52,7 @@ public class InstitutionsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(Guid id, Institution updated)
     {
-        var institution = await _context.Institutions.FindAsync(id);
+        Institution? institution = await _context.Institutions.FindAsync(id);
         if (institution == null) return NotFound();
 
         institution.Name = updated.Name;
@@ -70,7 +70,7 @@ public class InstitutionsController : ControllerBase
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(Guid id)
     {
-        var institution = await _context.Institutions.FindAsync(id);
+        Institution? institution = await _context.Institutions.FindAsync(id);
         if (institution == null) return NotFound();
 
         institution.IsActive = false;
