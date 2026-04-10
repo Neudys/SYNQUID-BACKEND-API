@@ -1,11 +1,16 @@
 using Microsoft.EntityFrameworkCore;
+using Synquid.Application.Interfaces;
 using Synquid.Infrastructure.Data;
+using Synquid.Infrastructure.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Base de datos PostgreSQL
 builder.Services.AddDbContext<SynquidDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+// Servicios de aplicaciÃ³n
+builder.Services.AddScoped<IAuditService, AuditService>();
 
 // Controllers + Swagger
 builder.Services.AddControllers();
@@ -37,7 +42,7 @@ app.UseCors("AllowAll");
 app.UseAuthorization();
 app.MapControllers();
 
-// Aplicar migraciones automáticamente al arrancar
+// Aplicar migraciones automï¿½ticamente al arrancar
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<SynquidDbContext>();

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Synquid.Application.Interfaces;
 using Synquid.Domain.Entities;
 using Synquid.Infrastructure.Data;
 using static System.Runtime.InteropServices.JavaScript.JSType;
@@ -18,11 +19,13 @@ public class AttendanceController : ControllerBase
 {
     private readonly SynquidDbContext _context;
     private readonly IConfiguration _config;
+    private readonly IAuditService _audit;
 
-    public AttendanceController(SynquidDbContext context, IConfiguration config)
+    public AttendanceController(SynquidDbContext context, IConfiguration config, IAuditService audit)
     {
         _context = context;
         _config = config;
+        _audit = audit;
     }
 
     // POST /api/attendance/check

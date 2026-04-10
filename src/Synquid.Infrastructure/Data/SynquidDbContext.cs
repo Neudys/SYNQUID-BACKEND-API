@@ -20,6 +20,7 @@ public class SynquidDbContext : DbContext
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<NfcCard> NfcCards => Set<NfcCard>();
     public DbSet<AttendanceRecord> AttendanceRecords => Set<AttendanceRecord>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -141,6 +142,23 @@ public class SynquidDbContext : DbContext
              .WithMany()
              .HasForeignKey(x => x.RegisteredById)
              .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // AuditLog
+        modelBuilder.Entity<AuditLog>(e =>
+        {
+            e.ToTable("audit_logs");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            e.Property(x => x.Action).HasMaxLength(50).IsRequired();
+            e.Property(x => x.Entity).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Details).HasMaxLength(1000);
+            e.Property(x => x.IpAddress).HasMaxLength(45);
+            e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            e.HasOne(x => x.User)
+             .WithMany()
+             .HasForeignKey(x => x.UserId)
+             .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }

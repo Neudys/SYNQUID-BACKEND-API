@@ -14,7 +14,6 @@ namespace Synquid.API.Controllers;
 [Route("api/[controller]")]
 public class UserController : ControllerBase
 {
-
     private readonly SynquidDbContext _context;
     private readonly IConfiguration _config;
 
@@ -28,11 +27,33 @@ public class UserController : ControllerBase
     public async Task<ActionResult<User>> perfilUser([FromBody] requestUser request)
     {
         ClaimsPrincipal principal = ValidateToken(request.token);
-        string userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
         User? u = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(userId ?? ""));
 
         if (u == null) return NotFound("Usuario no encontrado");
         return Ok(u);
+    }
+
+    [HttpPost]
+    public Task<ActionResult> saveUser([FromQuery] postUser user)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+        string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+
+        if (principal == null) return Task.FromResult<ActionResult>(Unauthorized("Token invalido"));
+
+        User u = new User{
+            FirstName = user.name,
+            LastName = user.lastName,
+            Email = user.email,
+            Role = user.rol,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(user.password)
+        };
+
+        return Task.FromResult<ActionResult>(Ok(new { 
+            mensaje = "Usuario Creado correctamente"  
+        }));
     }
 
     [HttpGet]
@@ -45,6 +66,7 @@ public class UserController : ControllerBase
         return Ok(usuarios);
     }
 
+    [HttpPost("validarToken")]
     private ClaimsPrincipal ValidateToken(string token)
     {
         var handler = new JwtSecurityTokenHandler();
@@ -77,13 +99,11 @@ public class UserController : ControllerBase
 
     public class postUser 
     {
-
         public string name { get; set; } = string.Empty;
+        public string lastName { get; set; } = string.Empty;
         public string email { get; set; } = string.Empty;
         public string password { get; set; } = string.Empty;
-
         public int rol { get; set; } = 0;
-
     }
 
 }
