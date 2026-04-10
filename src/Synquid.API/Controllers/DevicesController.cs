@@ -1,7 +1,11 @@
 ﻿using System;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using Synquid.Domain.Entities;
 using Synquid.Infrastructure.Data;
 
@@ -13,10 +17,12 @@ public class DevicesController : ControllerBase
 {
 
     private readonly SynquidDbContext _context;
+    private readonly IConfiguration _config;
 
-    public DevicesController(SynquidDbContext context)
+    public DevicesController(SynquidDbContext context, IConfiguration config)
     {
         _context = context;
+        _config = config;
     }
 
 
@@ -63,6 +69,81 @@ public class DevicesController : ControllerBase
         });
     }
 
+    [HttpGet("{id}")]
+    public async Task<ActionResult> getInfoDevice(String id) 
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+        string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        Device? device = await _context.Devices.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (device == null) NotFound("Dispositivo no encontrado");
+
+        return Ok(new
+        {
+            codigoError = 0,
+            deviceInfo = device,
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    [HttpPut("{id}")]
+    public async Task<ActionResult> updateDevice(String id, [FromQuery] updateDevice update)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+        string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        Device? device = await _context.Devices.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (device == null) NotFound("Dispositivo no encontrado");
+
+        device.Name = update.name ?? device.Name;
+        device.Location = update.location ?? device.Location;
+
+        _context.SaveChanges();
+
+        return Ok(new
+        {
+            codigoError = 0,
+            mensaje = "Actualizado correctamente",
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<ActionResult> deleteDevice(String id)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+        string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        Device? device = await _context.Devices.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (device == null) NotFound("Dispositivo no encontrado");
+
+        device.IsActive = false;
+
+        _context.SaveChanges();
+
+        return Ok(new
+        {
+            codigoError = 0,
+            mensaje = "Desactivado correctamente",
+            timestamp = DateTime.UtcNow
+        });
+    }
+
     [HttpGet]
     public async Task<ActionResult<List<Device>>> GetAll()
     {
@@ -73,7 +154,7 @@ public class DevicesController : ControllerBase
     }
 
     [HttpPost("{id}/regenerateKey")]
-    public async Task<ActionResult> regenerateKey([FromBody] regenerateKeyPost rkp ) 
+    public async Task<ActionResult> regenerateKey([FromBody] idReceived rkp ) 
     {
         try
         {
@@ -121,7 +202,31 @@ public class DevicesController : ControllerBase
         });
     }
 
+    private ClaimsPrincipal ValidateToken(string token)
+    {
+        var handler = new JwtSecurityTokenHandler();
+        var key = Encoding.UTF8.GetBytes(_config["JwtSettings:SecretKey"]!);
 
+        try
+        {
+            var principal = handler.ValidateToken(token, new TokenValidationParameters
+            {
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(key),
+                ValidateIssuer = true,
+                ValidIssuer = _config["JwtSettings:Issuer"],
+                ValidateAudience = true,
+                ValidAudience = _config["JwtSettings:Audience"],
+                ValidateLifetime = true
+            }, out SecurityToken validatedToken);
+
+            return principal;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private string GenerateApiKey()
     {
@@ -133,9 +238,14 @@ public class DevicesController : ControllerBase
     }
 }
 
-public class regenerateKeyPost 
+public class idReceived 
 {
     public string Id { get; set; } = string.Empty;
+}
+public class updateDevice 
+{
+    public string name { get; set; } = string.Empty;
+    public string location { get; set; } = string.Empty;
 }
 public class DevicePost 
 {

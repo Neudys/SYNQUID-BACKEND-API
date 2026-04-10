@@ -40,6 +40,7 @@ public class UserController : ControllerBase
     {
         List<User> usuarios = await _context.Users
             .OrderBy(i => i.FirstName)
+            .Skip((page -1 ) * 20)
             .ToListAsync();
         return Ok(usuarios);
     }
@@ -72,6 +73,17 @@ public class UserController : ControllerBase
     public class requestUser 
     {
         public string token { get; set; } = string.Empty; 
+    }
+
+    public class postUser 
+    {
+
+        public string name { get; set; } = string.Empty;
+        public string email { get; set; } = string.Empty;
+        public string password { get; set; } = string.Empty;
+
+        public int rol { get; set; } = 0;
+
     }
 
 }

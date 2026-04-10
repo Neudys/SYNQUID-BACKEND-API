@@ -130,6 +130,7 @@ public class AuthController : ControllerBase
         });
     }
 
+    [HttpPost("changePasword")]
     public async Task<ActionResult> changePassword([FromBody] requestChangePassword r) 
     {
         ClaimsPrincipal principal = ValidateToken(r.token);
