@@ -12,6 +12,7 @@ public class SynquidDbContext : DbContext
 {
     public SynquidDbContext(DbContextOptions<SynquidDbContext> options) : base(options) { }
 
+    public DbSet<PasswordResetToken> PasswordResetTokens { get; set; }
     public DbSet<Institution> Institutions => Set<Institution>();
     public DbSet<User> Users => Set<User>();
     public DbSet<Group> Groups => Set<Group>();

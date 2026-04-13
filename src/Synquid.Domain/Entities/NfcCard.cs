@@ -9,7 +9,7 @@ namespace Synquid.Domain.Entities;
 public class NfcCard
 {
     public Guid Id { get; set; }
-    public Guid UserId { get; set; }
+    public Guid? UserId { get; set; }
     public string HashUid { get; set; } = string.Empty;
     public string Salt { get; set; } = string.Empty;
     public int CardType { get; set; } // 0=Physical, 1=HCE

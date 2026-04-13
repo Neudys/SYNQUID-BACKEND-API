@@ -1,6 +1,8 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Identity.Data;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Synquid.API.Extensions;
 using Synquid.Domain.Entities;
 using Synquid.Infrastructure.Data;
 using System.IdentityModel.Tokens.Jwt;
@@ -75,7 +77,11 @@ public class AuthController : ControllerBase
     public async Task<ActionResult> logout() 
     {
         string authHeader = Request.Headers["Authorization"].ToString();
-        ClaimsPrincipal principal = ValidateToken(authHeader);
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
         string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
 
 
@@ -91,7 +97,7 @@ public class AuthController : ControllerBase
     [HttpPost("refresh")]
     public IActionResult Refresh([FromBody] refreshToken r)
     {
-        ClaimsPrincipal principal = ValidateToken(r.token);
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(r.token, _config);
 
         if (principal == null)
             return Unauthorized("Token inválido o expirado");
@@ -111,51 +117,86 @@ public class AuthController : ControllerBase
     {
         User? user = await _context.Users.FirstOrDefaultAsync(x => x.Email == forgotPasswordRequest.Email);
 
+        if (user == null)
+            return NotFound("El usuario no se encontró");
 
-        if (user == null) return NotFound("El usuario no se encontro");
-        try {
-            await SendMail(forgotPasswordRequest.Email, "Cambio de contraseña", "CAMBIO WASAAAA!!!");
+        try
+        {
+            string resetToken = Guid.NewGuid().ToString();
+
+            var passwordResetToken = new PasswordResetToken
+            {
+                Id = Guid.NewGuid(),
+                UserId = user.Id,
+                Token = resetToken,
+                ExpiresAt = DateTime.UtcNow.AddMinutes(15),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            await _context.PasswordResetTokens.AddAsync(passwordResetToken);
+            await _context.SaveChangesAsync();
+
+            string resetLink = $"https://tudominio.com/reset-password?token={resetToken}";
+            string emailBody = $@"
+            <h2>Recuperación de contraseña</h2>
+            <p>Haz clic en el enlace para resetear tu contraseña:</p>
+            <a href='{resetLink}'>Resetear contraseña</a>
+            <p>Este enlace expira en 15 minutos.</p>
+        ";
+
+            await SendMail(forgotPasswordRequest.Email, "Recuperación de contraseña", emailBody);
         }
         catch
         {
-            return BadRequest("Error fatal porfavor comuniquece con su proveedor");
+            return BadRequest("Error al enviar email. Contacta al administrador");
         }
-
 
         return Ok(new
         {
             errorCode = 0,
-            message = "Email enviado correctamente",
+            message = "Email de recuperación enviado correctamente",
             timestamp = DateTime.UtcNow,
         });
     }
 
-    [HttpPost("changePasword")]
-    public async Task<ActionResult> changePassword([FromBody] requestChangePassword r) 
+    [HttpPost("resetPassword")]
+    public async Task<ActionResult> ResetPassword([FromBody] resetPasswordRequest request)
     {
-        ClaimsPrincipal principal = ValidateToken(r.token);
+        var resetToken = await _context.PasswordResetTokens
+            .FirstOrDefaultAsync(t => t.Token == request.token && !t.IsUsed);
 
-        if (principal == null)
-            return Unauthorized("Token inválido o expirado");
+        if (resetToken == null)
+            return BadRequest("Token inválido o expirado");
 
-        string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-        User? user = _context.Users.Find(Guid.Parse(userId ?? ""));
+        if (resetToken.ExpiresAt < DateTime.UtcNow)
+            return BadRequest("El token de reset ha expirado");
 
-        if (user == null) return NotFound();
+        User? user = await _context.Users.FindAsync(resetToken.UserId);
 
-        bool valid = BCrypt.Net.BCrypt.Verify(r.oldPassword, user.PasswordHash);
-        if (!valid) return Unauthorized("Contraseña incorrecta");
+        if (user == null)
+            return NotFound("Usuario no encontrado");
 
-        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(r.newPassword);
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.newPassword);
+        user.UpdatedAt = DateTime.UtcNow;
+
+        resetToken.IsUsed = true;
+        resetToken.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
 
         return Ok(new
         {
             errorCode = 0,
-            message = "Email enviado correctamente",
+            message = "Contraseña restablecida correctamente",
             timestamp = DateTime.UtcNow,
         });
+    }
+
+    public class resetPasswordRequest
+    {
+        public string token { get; set; } = string.Empty;   
+        public string newPassword { get; set; } = string.Empty;
     }
 
     private async Task SendMail(string to, string subject, string body)
@@ -201,7 +242,7 @@ public class AuthController : ControllerBase
         if (string.IsNullOrEmpty(token))
             return Unauthorized("Token requerido");
 
-        var principal = ValidateToken(token);
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(token, _config);
 
         if (principal == null)
             return Unauthorized("Token inválido");
@@ -212,31 +253,27 @@ public class AuthController : ControllerBase
         return Ok(new { userId, role, valid = true });
     }
 
-    private ClaimsPrincipal ValidateToken(string token)
+    [HttpPost("verifyEmail")]
+    public async Task<ActionResult> VerifyEmail([FromBody] verifyEmailRequest request)
     {
-        var handler = new JwtSecurityTokenHandler();
-        var key = Encoding.UTF8.GetBytes(_config["JwtSettings:SecretKey"]!);
+        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Email == request.email);
 
-        try
-        {
-            var principal = handler.ValidateToken(token, new TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(key),
-                ValidateIssuer = true,
-                ValidIssuer = _config["JwtSettings:Issuer"],
-                ValidateAudience = true,
-                ValidAudience = _config["JwtSettings:Audience"],
-                ValidateLifetime = true
-            }, out SecurityToken validatedToken);
+        if (user == null)
+            return NotFound("Usuario no encontrado");
 
-            return principal;
-        }
-        catch
+        user.EmailVerified = true;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
         {
-            return null;
-        }
+            errorCode = 0,
+            message = "Email verificado correctamente",
+            timestamp = DateTime.UtcNow,
+        });
     }
+
     private string CreateToken(User user)
     {
         var secretKey = _config["JwtSettings:SecretKey"];
@@ -289,6 +326,15 @@ public class _RequestLogin
     public string email { get; set; } = string.Empty;
     public string password { get; set; } = string.Empty;
 }
+public class resetPasswordRequest
+{
+    public string email { get; set; } = string.Empty;
+    public string newPassword { get; set; } = string.Empty;
+}
 
+public class verifyEmailRequest
+{
+    public string email { get; set; } = string.Empty;
+}
 
 

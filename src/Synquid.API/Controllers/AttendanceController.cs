@@ -2,10 +2,12 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Synquid.API.Extensions;
 using Synquid.Application.Interfaces;
 using Synquid.Domain.Entities;
 using Synquid.Infrastructure.Data;
@@ -29,6 +31,7 @@ public class AttendanceController : ControllerBase
     }
 
     // POST /api/attendance/check
+    [Authorize]
     [HttpPost("check")]
     public async Task<ActionResult> Check([FromBody] CheckRequest request)
     {
@@ -55,8 +58,119 @@ public class AttendanceController : ControllerBase
         });
     }
 
+    [HttpGet("{id}")]
+    public async Task<ActionResult> GetAttendanceRecord(string id)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        AttendanceRecord? record = await _context.AttendanceRecords
+            .Include(a => a.User)
+            .Include(a => a.Device)
+            .FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (record == null)
+            return NotFound("Registro de asistencia no encontrado");
+
+        return Ok(new
+        {
+            codigoError = 0,
+            record = record,
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    [HttpPut("{id}")]
+    public async Task<ActionResult> UpdateAttendanceRecord(string id, [FromBody] updateAttendanceRecord update)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        AttendanceRecord? record = await _context.AttendanceRecords.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (record == null)
+            return NotFound("Registro de asistencia no encontrado");
+
+        record.TimestampUtc = update.timestampUtc ?? record.TimestampUtc;
+        record.TimestampLocal = update.timestampLocal ?? record.TimestampLocal;
+        record.Status = update.status ?? record.Status;
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            codigoError = 0,
+            message = "Registro de asistencia actualizado correctamente",
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    [HttpGet("export")]
+    public async Task<IActionResult> ExportAttendance([FromQuery] exportAttendance request)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        List<AttendanceRecord> records = await _context.AttendanceRecords
+            .Include(a => a.User)
+            .Where(a => a.TimestampUtc.Date >= request.from.Date && a.TimestampUtc.Date <= request.to.Date)
+            .OrderBy(a => a.TimestampUtc)
+            .ToListAsync();
+
+        var csv = "UserId,UserName,DeviceId,TimestampUTC,TimestampLocal,Type,Status,IsSynced\n";
+
+        foreach (var record in records)
+        {
+            csv += $"{record.UserId},{record.User?.FirstName} {record.User?.LastName},{record.DeviceId},{record.TimestampUtc},{record.TimestampLocal},{record.Type},{record.Status},{record.IsSynced}\n";
+        }
+
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(csv);
+        return File(bytes, "text/csv", $"attendance_{DateTime.UtcNow:yyyyMMdd}.csv");
+    }
+
+    [HttpGet("stats")]
+    public async Task<ActionResult> GetAttendanceStats([FromQuery] statsRequest request)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        List<AttendanceRecord> records = await _context.AttendanceRecords
+            .Where(a => a.TimestampUtc.Date >= request.from.Date && a.TimestampUtc.Date <= request.to.Date)
+            .ToListAsync();
+
+        int totalRecords = records.Count;
+        int presentCount = records.Count(a => a.Status == 0);
+        int absentCount = records.Count(a => a.Status == 1);
+        int lateCount = records.Count(a => a.Status == 2);
+
+        return Ok(new
+        {
+            codigoError = 0,
+            from = request.from.Date,
+            to = request.to.Date,
+            totalRecords = totalRecords,
+            present = presentCount,
+            absent = absentCount,
+            late = lateCount,
+            averageAttendance = totalRecords > 0 ? (double)presentCount / totalRecords * 100 : 0,
+            timestamp = DateTime.UtcNow
+        });
+    }
 
     // POST /api/attendance/register
+    [Authorize]
     [HttpPost("Register")]
     public async Task<ActionResult> Register([FromBody] RegisterRequest request)
     {
@@ -102,6 +216,7 @@ public class AttendanceController : ControllerBase
         });
     }
 
+    [Authorize]
     [HttpPost("sync")]
     public async Task<ActionResult> SyncAttendance([FromBody] List<syncAttendance> syncRequest)
     {
@@ -156,7 +271,8 @@ public class AttendanceController : ControllerBase
         if (!user.IsActive) return BadRequest("El usuario asociado no está activo");
 
         string authHeader = Request.Headers["Authorization"].ToString();
-        ClaimsPrincipal principal = ValidateToken(authHeader);
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+        if (principal == null) return Unauthorized("Token invalido");
         string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
 
         _context.AttendanceRecords.Add(new AttendanceRecord
@@ -173,6 +289,8 @@ public class AttendanceController : ControllerBase
             CreatedAt = DateTime.UtcNow,
         });
 
+        await _context.SaveChangesAsync();
+
         return Ok(new
         {
             found = true,
@@ -184,7 +302,7 @@ public class AttendanceController : ControllerBase
     public async Task<ActionResult> TodayAttendance([FromQuery] todayAttendance request)
     {
         string token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
-        ClaimsPrincipal principal = ValidateToken(token);
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(token, _config);
         if (principal == null) return Unauthorized("Token inválido");
 
         Institution? institution = await _context.Institutions
@@ -219,7 +337,7 @@ public class AttendanceController : ControllerBase
     public async Task<ActionResult> historyAttendance([FromQuery] historyAttendance attendance) 
     {
         string token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
-        ClaimsPrincipal principal = ValidateToken(token);
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(token, _config);
         if (principal == null) return Unauthorized("Token inválido");
 
         User? user = await _context.Users.FirstOrDefaultAsync( x => x.Id == Guid.Parse(attendance.userId));
@@ -252,7 +370,7 @@ public class AttendanceController : ControllerBase
     public async Task<ActionResult> myHistory([FromQuery] historyAttendance attendance) 
     {
         string token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
-        ClaimsPrincipal principal = ValidateToken(token);
+        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(token, _config);
         if (principal == null) return Unauthorized("Token inválido");
 
         User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(attendance.userId));
@@ -270,36 +388,27 @@ public class AttendanceController : ControllerBase
             records
         });
     }
-
-    private ClaimsPrincipal ValidateToken(string token)
-    {
-        var handler = new JwtSecurityTokenHandler();
-        var key = Encoding.UTF8.GetBytes(_config["JwtSettings:SecretKey"]!);
-
-        try
-        {
-            var principal = handler.ValidateToken(token, new TokenValidationParameters
-            {
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = new SymmetricSecurityKey(key),
-                ValidateIssuer = true,
-                ValidIssuer = _config["JwtSettings:Issuer"],
-                ValidateAudience = true,
-                ValidAudience = _config["JwtSettings:Audience"],
-                ValidateLifetime = true
-            }, out SecurityToken validatedToken);
-
-            return principal;
-        }
-        catch
-        {
-            return null;
-        }
-    }
 }
 
+public class updateAttendanceRecord
+{
+    public DateTime? timestampUtc { get; set; }
+    public DateTime? timestampLocal { get; set; }
+    public int? status { get; set; }
+    public string notes { get; set; } = string.Empty;
+}
 
+public class exportAttendance
+{
+    public DateTime from { get; set; } = DateTime.UtcNow.AddDays(-7);
+    public DateTime to { get; set; } = DateTime.UtcNow;
+}
 
+public class statsRequest
+{
+    public DateTime from { get; set; } = DateTime.UtcNow.AddDays(-30);
+    public DateTime to { get; set; } = DateTime.UtcNow;
+}
 public class CheckRequest
 {
     public string Uid { get; set; } = string.Empty;
