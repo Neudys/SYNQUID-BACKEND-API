@@ -202,6 +202,156 @@ public class DevicesController : ControllerBase
         });
     }
 
+    [HttpGet("{id}")]
+    public async Task<ActionResult<User>> GetUserById(string id)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (user == null) return NotFound("Usuario no encontrado");
+
+        return Ok(new
+        {
+            codigoError = 0,
+            userData = user,
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    [HttpPut("{id}")]
+    public async Task<ActionResult> UpdateUser(string id, [FromBody] updateUser update)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (user == null) return NotFound("Usuario no encontrado");
+
+        user.FirstName = update.firstName ?? user.FirstName;
+        user.LastName = update.lastName ?? user.LastName;
+        user.Email = update.email ?? user.Email;
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            codigoError = 0,
+            mensaje = "Usuario actualizado correctamente",
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<ActionResult> DeleteUser(string id)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (user == null) return NotFound("Usuario no encontrado");
+
+        _context.Users.Remove(user);
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            codigoError = 0,
+            mensaje = "Usuario eliminado correctamente",
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    [HttpPatch("{id}/role")]
+    public async Task<ActionResult> UpdateUserRole(string id, [FromBody] updateRole roleUpdate)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (user == null) return NotFound("Usuario no encontrado");
+
+        user.Role = roleUpdate.role;
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            codigoError = 0,
+            mensaje = "Rol actualizado correctamente",
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    [HttpPost("{id}/nfc")]
+    public async Task<ActionResult> AssignNfcCard(string id, [FromBody] assignNfc nfcData)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (user == null) return NotFound("Usuario no encontrado");
+
+        NfcCard? nfcCard = await _context.NfcCards.FirstOrDefaultAsync(x => x.Id == Guid.Parse(nfcData.nfcCardId));
+
+        if (nfcCard == null) return NotFound("Tarjeta NFC no encontrada");
+
+        List<NfcCard> cards = new List<NfcCard>();
+        cards.Add(nfcCard);
+        user.NfcCards = cards;
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            codigoError = 0,
+            mensaje = "Tarjeta NFC asignada correctamente",
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    [HttpDelete("{id}/nfc")]
+    public async Task<ActionResult> UnassignNfcCard(string id)
+    {
+        string authHeader = Request.Headers["Authorization"].ToString();
+        ClaimsPrincipal principal = ValidateToken(authHeader);
+
+        if (principal == null)
+            return Unauthorized("Token inválido o expirado");
+
+        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(id));
+
+        if (user == null) return NotFound("Usuario no encontrado");
+
+        user.NfcCards = null;
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            codigoError = 0,
+            mensaje = "Tarjeta NFC desasignada correctamente",
+            timestamp = DateTime.UtcNow
+        });
+    }
     private ClaimsPrincipal ValidateToken(string token)
     {
         var handler = new JwtSecurityTokenHandler();
@@ -264,3 +414,19 @@ public class DeviceRequest
     public string? FirmwareVersion { get; set; } 
 }
 
+public class updateUser
+{
+    public string firstName { get; set; } = string.Empty;
+    public string lastName { get; set; } = string.Empty;
+    public string email { get; set; } = string.Empty;
+}
+
+public class updateRole
+{
+    public int role { get; set; } = 0;
+}
+
+public class assignNfc
+{
+    public string nfcCardId { get; set; } = string.Empty;
+}

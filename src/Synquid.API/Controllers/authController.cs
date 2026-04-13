@@ -193,6 +193,25 @@ public class AuthController : ControllerBase
         }
     }
 
+    [HttpPost("validateToken")]
+    public ActionResult ValidateTokenPublic([FromHeader(Name = "Authorization")] string authorization)
+    {
+        var token = authorization?.Replace("Bearer ", "").Trim();
+
+        if (string.IsNullOrEmpty(token))
+            return Unauthorized("Token requerido");
+
+        var principal = ValidateToken(token);
+
+        if (principal == null)
+            return Unauthorized("Token inválido");
+
+        var userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        var role = principal.FindFirst(ClaimTypes.Role)?.Value;
+
+        return Ok(new { userId, role, valid = true });
+    }
+
     private ClaimsPrincipal ValidateToken(string token)
     {
         var handler = new JwtSecurityTokenHandler();

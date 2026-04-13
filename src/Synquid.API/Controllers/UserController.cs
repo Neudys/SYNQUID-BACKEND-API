@@ -24,9 +24,17 @@ public class UserController : ControllerBase
     }
 
     [HttpGet("me")]
-    public async Task<ActionResult<User>> perfilUser([FromBody] requestUser request)
+    public async Task<ActionResult<User>> PerfilUser([FromHeader(Name = "Authorization")] string authorization)
     {
-        ClaimsPrincipal principal = ValidateToken(request.token);
+        var token = authorization?.Replace("Bearer ", "").Trim();
+
+        if (string.IsNullOrEmpty(token))
+            return Unauthorized("Token requerido");
+
+        ClaimsPrincipal principal = ValidateToken(token);
+        if (principal == null)
+            return Unauthorized("Token inválido");
+
         string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
         User? u = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(userId ?? ""));
 
@@ -35,7 +43,7 @@ public class UserController : ControllerBase
     }
 
     [HttpPost]
-    public Task<ActionResult> saveUser([FromQuery] postUser user)
+    public Task<ActionResult> saveUser([FromBody] postUser user)
     {
         string authHeader = Request.Headers["Authorization"].ToString();
         ClaimsPrincipal principal = ValidateToken(authHeader);
@@ -50,6 +58,9 @@ public class UserController : ControllerBase
             Role = user.rol,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(user.password)
         };
+
+        _context.Users.Add(u);
+        _context.SaveChanges();
 
         return Task.FromResult<ActionResult>(Ok(new { 
             mensaje = "Usuario Creado correctamente"  
@@ -66,7 +77,7 @@ public class UserController : ControllerBase
         return Ok(usuarios);
     }
 
-    [HttpPost("validarToken")]
+
     private ClaimsPrincipal ValidateToken(string token)
     {
         var handler = new JwtSecurityTokenHandler();
