@@ -140,6 +140,9 @@ public class AttendanceController : ControllerBase
     [HttpGet("stats")]
     public async Task<ActionResult> GetAttendanceStats([FromQuery] statsRequest request)
     {
+        var from = DateTime.SpecifyKind(request.from, DateTimeKind.Utc);
+        var to = DateTime.SpecifyKind(request.to, DateTimeKind.Utc);
+
         string authHeader = Request.Headers["Authorization"].ToString();
         ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
 
@@ -147,7 +150,7 @@ public class AttendanceController : ControllerBase
             return Unauthorized("Token inválido o expirado");
 
         List<AttendanceRecord> records = await _context.AttendanceRecords
-            .Where(a => a.TimestampUtc.Date >= request.from.Date && a.TimestampUtc.Date <= request.to.Date)
+            .Where(a => a.TimestampUtc.Date >= from && a.TimestampUtc.Date <= to)
             .ToListAsync();
 
         int totalRecords = records.Count;
@@ -298,6 +301,13 @@ public class AttendanceController : ControllerBase
         });
     }
 
+    [Authorize]
+    [HttpGet("All")]
+    public async Task<ActionResult<List<AttendanceRecord>>> GetAll()
+    {
+        return await _context.AttendanceRecords.ToListAsync();
+    }
+
     [HttpGet("today")]
     public async Task<ActionResult> TodayAttendance([FromQuery] todayAttendance request)
     {
@@ -340,22 +350,30 @@ public class AttendanceController : ControllerBase
         ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(token, _config);
         if (principal == null) return Unauthorized("Token inválido");
 
-        User? user = await _context.Users.FirstOrDefaultAsync( x => x.Id == Guid.Parse(attendance.userId));
+        if (!Guid.TryParse(attendance.userId, out var userId))
+            return BadRequest("userId no es un Guid válido");
 
-        Group? group = await _context.Groups
-            .FirstOrDefaultAsync(x => x.Id == Guid.Parse(attendance.groupId));
+        if (!Guid.TryParse(attendance.groupId, out var groupId))
+            return BadRequest("groupId no es un Guid válido");
+
+        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId);
+        Group? group = await _context.Groups.FirstOrDefaultAsync(x => x.Id == groupId);
 
         if (group == null) return NotFound("Grupo no encontrado");
         if (user == null) return NotFound("Profesor no encontrado");
-
         if (group.ProfessorId != user.Id)
             return BadRequest("el profesor no esta asignado al grupo");
 
+        var fromUtc = DateTime.SpecifyKind(attendance.from, DateTimeKind.Utc);
+        var toUtc = DateTime.SpecifyKind(attendance.to, DateTimeKind.Utc);
+
         List<AttendanceRecord> records = await _context.AttendanceRecords
-           .Where(x =>
-               x.TimestampUtc.Date >= attendance.from && x.TimestampUtc.Date <= attendance.to )
-           .Skip((attendance.page - 1) * attendance.limit)
-           .ToListAsync();
+            .Where(x =>
+                x.TimestampUtc >= fromUtc &&
+                x.TimestampUtc <= toUtc)
+            .Skip((attendance.page - 1) * attendance.limit)
+            .Take(attendance.limit)
+            .ToListAsync();
 
         return Ok(new
         {

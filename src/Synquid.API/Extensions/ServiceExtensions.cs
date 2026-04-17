@@ -16,6 +16,8 @@ public static class AuthenticationExtensions
 
         try
         {
+            token = token.Replace("Bearer ", "");
+
             var principal = handler.ValidateToken(token, new TokenValidationParameters
             {
                 ValidateIssuerSigningKey = true,
