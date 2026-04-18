@@ -8,15 +8,21 @@ namespace Synquid.API.Extensions;
 public static class AuthenticationExtensions
 {
     public static ClaimsPrincipal? ValidateTokenStatic(
-        string token,
-        IConfiguration config)
+    string token,
+    IConfiguration config)
     {
+        JwtSecurityTokenHandler.DefaultInboundClaimTypeMap.Clear();
+
         var handler = new JwtSecurityTokenHandler();
         var key = Encoding.UTF8.GetBytes(config["JwtSettings:SecretKey"]!);
-
         try
         {
             token = token.Replace("Bearer ", "");
+                        var jwtToken = handler.ReadToken(token) as JwtSecurityToken;
+            foreach (var claim in jwtToken?.Claims ?? new List<Claim>())
+            {
+                Console.WriteLine($"  {claim.Type}: {claim.Value}");
+            }
 
             var principal = handler.ValidateToken(token, new TokenValidationParameters
             {
@@ -31,7 +37,7 @@ public static class AuthenticationExtensions
 
             return principal;
         }
-        catch
+        catch (Exception ex)
         {
             return null;
         }
