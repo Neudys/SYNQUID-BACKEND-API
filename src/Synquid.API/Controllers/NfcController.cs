@@ -83,6 +83,74 @@ public class NfcController : ControllerBase
         });
     }
 
+    [HttpPost("AssignCard")]
+    public async Task<ActionResult> AssignCard([FromBody] AssignCardRequest request)
+    {
+        // Validaciones básicas
+        if (string.IsNullOrEmpty(request.Uuid))
+            return BadRequest("UUID de tarjeta requerido");
+        if (string.IsNullOrEmpty(request.Email))
+            return BadRequest("Email requerido");
+
+        Guid cardUid = Guid.Parse(request.Uuid);
+        Guid institutionId = Guid.Parse(request.InstitutionId);
+
+
+        Institution? institution = await _context.Institutions.FirstOrDefaultAsync(i => i.Id == institutionId);
+        if (institution == null) return NotFound("Institución no encontrada");
+
+
+        User? user = await _context.Users.FirstOrDefaultAsync(u => u.Email == request.Email && u.InstitutionId == institutionId);
+
+        if (user == null)
+        {
+            user = new User
+            {
+                Id = Guid.NewGuid(),
+                FirstName = request.Name,
+                Email = request.Email,
+                InstitutionId = institutionId,
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+        }
+
+
+        NfcCard? card = await _context.NfcCards.FirstOrDefaultAsync(c => c.Id == cardUid);
+
+        if (card == null)
+        {
+
+            card = new NfcCard
+            {
+                Id = cardUid,
+                HashUid = HashUid(request.Uuid),
+                UserId = user.Id,
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.NfcCards.Add(card);
+        }
+        else
+        {
+
+            card.UserId = user.Id;
+            card.IsActive = true;
+        }
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            found = true,
+            message = "Tarjeta asignada correctamente",
+            userId = user.Id,
+            cardId = card.Id
+        });
+    }
+
     [HttpDelete("{id}")]
     public async Task<ActionResult> DeleteNfc(string id)
     {
@@ -108,9 +176,24 @@ public class NfcController : ControllerBase
         });
     }
 
-}
 
-public class registerNfc
-{
-    public string hashUid { get; set; } = string.Empty;
+    private string HashUid(string uid)
+    {
+        using (var sha256 = System.Security.Cryptography.SHA256.Create())
+        {
+            byte[] hashedBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(uid));
+            return Convert.ToBase64String(hashedBytes);
+        }
+    }
+    public class AssignCardRequest
+    {
+        public string Uuid { get; set; }
+        public string Name { get; set; }
+        public string Email { get; set; }
+        public string InstitutionId { get; set; }
+    }
+    public class registerNfc
+    {
+        public string hashUid { get; set; } = string.Empty;
+    }
 }
