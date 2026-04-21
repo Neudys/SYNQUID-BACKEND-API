@@ -30,301 +30,360 @@ public class UserController : ControllerBase
     [HttpGet("me")]
     public async Task<ActionResult<UserResponseDto>> PerfilUser([FromHeader(Name = "Authorization")] string authorization)
     {
-        var token = authorization?.Replace("Bearer ", "").Trim();
-        if (string.IsNullOrEmpty(token))
-            return Unauthorized("Token requerido");
+        try
+        {
+            var token = authorization?.Replace("Bearer ", "").Trim();
+            if (string.IsNullOrEmpty(token))
+                return Unauthorized("Token requerido");
 
-        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(token, _config);
-        
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(token, _config);
 
-        if (principal == null)
-            return Unauthorized("Token inválido");
+            if (principal == null)
+                return Unauthorized("Token inválido");
 
-        string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+            string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
 
-        if (string.IsNullOrEmpty(userId) || !Guid.TryParse(userId, out var id))
-            return Unauthorized("Token no contiene ID válido");
+            if (string.IsNullOrEmpty(userId) || !Guid.TryParse(userId, out var id))
+                return Unauthorized("Token no contiene ID válido");
 
-        User? u = await _context.Users.FirstOrDefaultAsync(x => x.Id == id && x.IsActive);
+            User? u = await _context.Users.FirstOrDefaultAsync(x => x.Id == id && x.IsActive);
 
-        if (u == null)
-            return NotFound("Usuario no encontrado");
+            if (u == null)
+                return NotFound("Usuario no encontrado");
 
-        return Ok(UserResponseDto.FromUser(u));
+            return Ok(UserResponseDto.FromUser(u));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
     }
 
     [HttpPost]
     public async Task<ActionResult> SaveUser([FromBody] postUser user)
     {
-        string authHeader = Request.Headers["Authorization"].ToString();
-        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
-        if (principal == null)
-            return Unauthorized("Token inválido");
-
-        // Validar que el email no exista
-        var existingUser = await _context.Users.FirstOrDefaultAsync(u => u.Email == user.email);
-        if (existingUser != null)
-            return BadRequest("El email ya está registrado");
-
-        User u = new User
+        try
         {
-            Id = Guid.NewGuid(),
-            FirstName = user.name,
-            LastName = user.lastName,
-            Email = user.email,
-            Role = user.rol,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(user.password),
-            IsActive = true,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+            if (principal == null)
+                return Unauthorized("Token inválido");
 
-        await _context.Users.AddAsync(u);
-        await _context.SaveChangesAsync();
+            var existingUser = await _context.Users.FirstOrDefaultAsync(u => u.Email == user.email);
+            if (existingUser != null)
+                return BadRequest("El email ya está registrado");
 
-        return Ok(new
+            User u = new User
+            {
+                Id = Guid.NewGuid(),
+                FirstName = user.name,
+                LastName = user.lastName,
+                Email = user.email,
+                Role = user.rol,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(user.password),
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            await _context.Users.AddAsync(u);
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                mensaje = "Usuario creado correctamente",
+                userId = u.Id,
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
         {
-            codigoError = 0,
-            mensaje = "Usuario creado correctamente",
-            userId = u.Id,
-            timestamp = DateTime.UtcNow
-        });
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
     }
 
     [HttpGet]
     public async Task<ActionResult<List<User>>> GetUsers([FromQuery] int page = 1)
     {
-        if (page < 1)
-            return BadRequest("El número de página debe ser mayor a 0");
-
-        List<User> usuarios = await _context.Users
-            .Where(u => u.IsActive)
-            .OrderBy(i => i.FirstName)
-            .Skip((page - 1) * 20)
-            .Take(20)
-            .ToListAsync();
-
-        int total = await _context.Users.CountAsync(u => u.IsActive);
-
-        return Ok(new
+        try
         {
-            codigoError = 0,
-            page = page,
-            totalUsers = total,
-            users = usuarios,
-            timestamp = DateTime.UtcNow
-        });
+            if (page < 1)
+                return BadRequest("El número de página debe ser mayor a 0");
+
+            List<User> usuarios = await _context.Users
+                .Where(u => u.IsActive)
+                .OrderBy(i => i.FirstName)
+                .Skip((page - 1) * 20)
+                .Take(20)
+                .ToListAsync();
+
+            int total = await _context.Users.CountAsync(u => u.IsActive);
+
+            return Ok(new
+            {
+                codigoError = 0,
+                page = page,
+                totalUsers = total,
+                users = usuarios,
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
     }
 
     [HttpGet("{id}")]
     public async Task<ActionResult> GetUserById(string id)
     {
-        if (!Guid.TryParse(id, out var userId))
-            return BadRequest("ID inválido");
-
-        string authHeader = Request.Headers["Authorization"].ToString();
-        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
-
-        if (principal == null)
-            return Unauthorized("Token inválido o expirado");
-
-        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
-
-        if (user == null)
-            return NotFound("Usuario no encontrado");
-
-        return Ok(new
+        try
         {
-            codigoError = 0,
-            userData = UserResponseDto.FromUser(user),
-            timestamp = DateTime.UtcNow
-        });
+            if (!Guid.TryParse(id, out var userId))
+                return BadRequest("ID inválido");
+
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+            if (principal == null)
+                return Unauthorized("Token inválido o expirado");
+
+            User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
+
+            if (user == null)
+                return NotFound("Usuario no encontrado");
+
+            return Ok(new
+            {
+                codigoError = 0,
+                userData = UserResponseDto.FromUser(user),
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
     }
 
     [HttpPut("{id}")]
     public async Task<ActionResult> UpdateUser(string id, [FromBody] updateUser update)
     {
-        if (!Guid.TryParse(id, out var userId))
-            return BadRequest("ID inválido");
-
-        string authHeader = Request.Headers["Authorization"].ToString();
-        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
-
-        if (principal == null)
-            return Unauthorized("Token inválido o expirado");
-
-        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
-
-        if (user == null)
-            return NotFound("Usuario no encontrado");
-
-        // Validar email único si se actualiza
-        if (!string.IsNullOrEmpty(update.email) && update.email != user.Email)
+        try
         {
-            var emailExists = await _context.Users.FirstOrDefaultAsync(u => u.Email == update.email && u.Id != userId);
-            if (emailExists != null)
-                return BadRequest("El email ya está registrado");
+            if (!Guid.TryParse(id, out var userId))
+                return BadRequest("ID inválido");
+
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+            if (principal == null)
+                return Unauthorized("Token inválido o expirado");
+
+            User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
+
+            if (user == null)
+                return NotFound("Usuario no encontrado");
+
+            if (!string.IsNullOrEmpty(update.email) && update.email != user.Email)
+            {
+                var emailExists = await _context.Users.FirstOrDefaultAsync(u => u.Email == update.email && u.Id != userId);
+                if (emailExists != null)
+                    return BadRequest("El email ya está registrado");
+            }
+
+            user.FirstName = update.firstName ?? user.FirstName;
+            user.LastName = update.lastName ?? user.LastName;
+            user.Email = update.email ?? user.Email;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                mensaje = "Usuario actualizado correctamente",
+                timestamp = DateTime.UtcNow
+            });
         }
-
-        user.FirstName = update.firstName ?? user.FirstName;
-        user.LastName = update.lastName ?? user.LastName;
-        user.Email = update.email ?? user.Email;
-        user.UpdatedAt = DateTime.UtcNow;
-
-        await _context.SaveChangesAsync();
-
-        return Ok(new
+        catch (Exception ex)
         {
-            codigoError = 0,
-            mensaje = "Usuario actualizado correctamente",
-            timestamp = DateTime.UtcNow
-        });
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
     }
 
     [HttpDelete("{id}")]
     public async Task<ActionResult> DeleteUser(string id)
     {
-        if (!Guid.TryParse(id, out var userId))
-            return BadRequest("ID inválido");
-
-        string authHeader = Request.Headers["Authorization"].ToString();
-        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
-
-        if (principal == null)
-            return Unauthorized("Token inválido o expirado");
-
-        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
-
-        if (user == null)
-            return NotFound("Usuario no encontrado");
-
-        user.IsActive = false;
-        user.UpdatedAt = DateTime.UtcNow;
-
-        await _context.SaveChangesAsync();
-
-        return Ok(new
+        try
         {
-            codigoError = 0,
-            mensaje = "Usuario eliminado correctamente",
-            timestamp = DateTime.UtcNow
-        });
+            if (!Guid.TryParse(id, out var userId))
+                return BadRequest("ID inválido");
+
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+            if (principal == null)
+                return Unauthorized("Token inválido o expirado");
+
+            User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
+
+            if (user == null)
+                return NotFound("Usuario no encontrado");
+
+            user.IsActive = false;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                mensaje = "Usuario eliminado correctamente",
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
     }
 
     [HttpPatch("{id}/role")]
     public async Task<ActionResult> UpdateUserRole(string id, [FromBody] updateRole roleUpdate)
     {
-        if (!Guid.TryParse(id, out var userId))
-            return BadRequest("ID inválido");
-
-        string authHeader = Request.Headers["Authorization"].ToString();
-        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
-
-        if (principal == null)
-            return Unauthorized("Token inválido o expirado");
-
-        string? roleStr = principal.FindFirst("role")?.Value;
-        if (string.IsNullOrEmpty(roleStr) ||
-            !int.TryParse(roleStr, out var userRole) ||
-            (userRole != UserRoles.SuperAdmin && userRole != UserRoles.Admin))
+        try
         {
-            return Forbid("Solo administradores pueden cambiar roles");
+            if (!Guid.TryParse(id, out var userId))
+                return BadRequest("ID inválido");
+
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+            if (principal == null)
+                return Unauthorized("Token inválido o expirado");
+
+            string? roleStr = principal.FindFirst("role")?.Value;
+            if (string.IsNullOrEmpty(roleStr) ||
+                !int.TryParse(roleStr, out var userRole) ||
+                (userRole != UserRoles.SuperAdmin && userRole != UserRoles.Admin))
+            {
+                return Forbid("Solo administradores pueden cambiar roles");
+            }
+
+            User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
+
+            if (user == null)
+                return NotFound("Usuario no encontrado");
+
+            user.Role = roleUpdate.role;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                mensaje = "Rol actualizado correctamente",
+                timestamp = DateTime.UtcNow
+            });
         }
-
-        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
-
-        if (user == null)
-            return NotFound("Usuario no encontrado");
-
-        user.Role = roleUpdate.role;
-        user.UpdatedAt = DateTime.UtcNow;
-
-        await _context.SaveChangesAsync();
-
-        return Ok(new
+        catch (Exception ex)
         {
-            codigoError = 0,
-            mensaje = "Rol actualizado correctamente",
-            timestamp = DateTime.UtcNow
-        });
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
     }
 
     [HttpPost("{id}/nfc")]
     public async Task<ActionResult> AssignNfcCard(string id, [FromBody] assignNfc nfcData)
     {
-        if (!Guid.TryParse(id, out var userId))
-            return BadRequest("ID de usuario inválido");
-
-        if (!Guid.TryParse(nfcData.nfcCardId, out var nfcCardId))
-            return BadRequest("ID de tarjeta NFC inválido");
-
-        string authHeader = Request.Headers["Authorization"].ToString();
-        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
-
-        if (principal == null)
-            return Unauthorized("Token inválido o expirado");
-
-        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
-
-        if (user == null)
-            return NotFound("Usuario no encontrado");
-
-        NfcCard? nfcCard = await _context.NfcCards.FirstOrDefaultAsync(x => x.Id == nfcCardId && x.IsActive);
-
-        if (nfcCard == null)
-            return NotFound("Tarjeta NFC no encontrada");
-
-        // Validar que la tarjeta no esté asignada a otro usuario
-        if (nfcCard.UserId != null && nfcCard.UserId != userId)
-            return BadRequest("La tarjeta NFC ya está asignada a otro usuario");
-
-        nfcCard.UserId = user.Id;
-        user.UpdatedAt = DateTime.UtcNow;
-
-        await _context.SaveChangesAsync();
-
-        return Ok(new
+        try
         {
-            codigoError = 0,
-            mensaje = "Tarjeta NFC asignada correctamente",
-            timestamp = DateTime.UtcNow
-        });
+            if (!Guid.TryParse(id, out var userId))
+                return BadRequest("ID de usuario inválido");
+
+            if (!Guid.TryParse(nfcData.nfcCardId, out var nfcCardId))
+                return BadRequest("ID de tarjeta NFC inválido");
+
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+            if (principal == null)
+                return Unauthorized("Token inválido o expirado");
+
+            User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
+
+            if (user == null)
+                return NotFound("Usuario no encontrado");
+
+            NfcCard? nfcCard = await _context.NfcCards.FirstOrDefaultAsync(x => x.Id == nfcCardId && x.IsActive);
+
+            if (nfcCard == null)
+                return NotFound("Tarjeta NFC no encontrada");
+
+            if (nfcCard.UserId != null && nfcCard.UserId != userId)
+                return BadRequest("La tarjeta NFC ya está asignada a otro usuario");
+
+            nfcCard.UserId = user.Id;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                mensaje = "Tarjeta NFC asignada correctamente",
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
     }
 
     [HttpDelete("{id}/nfc")]
     public async Task<ActionResult> UnassignNfcCard(string id)
     {
-        if (!Guid.TryParse(id, out var userId))
-            return BadRequest("ID inválido");
-
-        string authHeader = Request.Headers["Authorization"].ToString();
-        ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
-
-        if (principal == null)
-            return Unauthorized("Token inválido o expirado");
-
-        User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
-
-        if (user == null)
-            return NotFound("Usuario no encontrado");
-
-        NfcCard? nfcCard = await _context.NfcCards.FirstOrDefaultAsync(x => x.UserId == user.Id && x.IsActive);
-
-        if (nfcCard == null)
-            return NotFound("Tarjeta NFC no asignada al usuario");
-
-        nfcCard.IsActive = false;
-        nfcCard.UserId = null;
-        user.UpdatedAt = DateTime.UtcNow;
-
-        await _context.SaveChangesAsync();
-
-        return Ok(new
+        try
         {
-            codigoError = 0,
-            mensaje = "Tarjeta NFC desasignada correctamente",
-            timestamp = DateTime.UtcNow
-        });
+            if (!Guid.TryParse(id, out var userId))
+                return BadRequest("ID inválido");
+
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+            if (principal == null)
+                return Unauthorized("Token inválido o expirado");
+
+            User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
+
+            if (user == null)
+                return NotFound("Usuario no encontrado");
+
+            NfcCard? nfcCard = await _context.NfcCards.FirstOrDefaultAsync(x => x.UserId == user.Id && x.IsActive);
+
+            if (nfcCard == null)
+                return NotFound("Tarjeta NFC no asignada al usuario");
+
+            nfcCard.IsActive = false;
+            nfcCard.UserId = null;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                mensaje = "Tarjeta NFC desasignada correctamente",
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
     }
 
     public class postUser
