@@ -30,39 +30,6 @@ public class AttendanceController : ControllerBase
         _audit = audit;
     }
 
-    // POST /api/attendance/check
-    [Authorize]
-    [HttpPost("check")]
-    public async Task<ActionResult> Check([FromBody] CheckRequest request)
-    {
-        try
-        {
-            var card = await _context.NfcCards
-                .Include(c => c.User)
-                .FirstOrDefaultAsync(c => c.HashUid == request.Uid && c.IsActive);
-
-            if (card == null)
-            {
-                return Ok(new
-                {
-                    found = false,
-                    message = "Tarjeta NO encontrada"
-                });
-            }
-
-            return Ok(new
-            {
-                found = true,
-                message = "Tarjeta encontrada",
-                studentName = card.User.FirstName + " " + card.User.LastName,
-                studentEmail = card.User.Email
-            });
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
-        }
-    }
 
     [HttpGet("{id}")]
     public async Task<ActionResult> GetAttendanceRecord(string id)
