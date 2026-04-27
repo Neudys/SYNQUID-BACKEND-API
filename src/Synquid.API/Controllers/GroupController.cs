@@ -73,7 +73,7 @@ public class GroupController : ControllerBase
     }
 
     [HttpPut("{id}")]
-    public async Task<IActionResult> Update(Guid id, Group updated)
+    public async Task<IActionResult> Update(Guid id, UpdateGroupDto updated)
     {
         try
         {
@@ -94,6 +94,7 @@ public class GroupController : ControllerBase
             return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
         }
     }
+
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(Guid id)
@@ -229,4 +230,12 @@ public class GroupController : ControllerBase
 public class assignUserToGroup
 {
     public string userId { get; set; } = string.Empty;
+}
+
+public class UpdateGroupDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string? Level { get; set; }
+    public Guid InstitutionId { get; set; }
+    public Guid ProfessorId { get; set; }
 }
