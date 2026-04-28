@@ -21,6 +21,7 @@ public class SynquidDbContext : DbContext
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<NfcCard> NfcCards => Set<NfcCard>();
     public DbSet<AttendanceRecord> AttendanceRecords => Set<AttendanceRecord>();
+    public DbSet<DailyAttendance> DailyAttendances => Set<DailyAttendance>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -142,6 +143,40 @@ public class SynquidDbContext : DbContext
             e.HasOne(x => x.RegisteredBy)
              .WithMany()
              .HasForeignKey(x => x.RegisteredById)
+             .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // DailyAttendance
+        modelBuilder.Entity<DailyAttendance>(e =>
+        {
+            e.ToTable("daily_attendances");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
+            e.HasIndex(x => new { x.UserId, x.ScheduleId, x.Date }).IsUnique();
+
+            e.HasOne(x => x.User)
+             .WithMany()
+             .HasForeignKey(x => x.UserId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.Schedule)
+             .WithMany()
+             .HasForeignKey(x => x.ScheduleId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.Group)
+             .WithMany()
+             .HasForeignKey(x => x.GroupId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.Professor)
+             .WithMany()
+             .HasForeignKey(x => x.ProfessorId)
+             .OnDelete(DeleteBehavior.Restrict);
+
+            e.HasOne(x => x.ModifiedBy)
+             .WithMany()
+             .HasForeignKey(x => x.ModifiedById)
              .OnDelete(DeleteBehavior.SetNull);
         });
 

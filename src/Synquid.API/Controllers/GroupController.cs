@@ -53,13 +53,21 @@ public class GroupController : ControllerBase
     }
 
     [HttpPost]
-    public async Task<ActionResult<Group>> Create(Group group)
+    public async Task<ActionResult<Group>> Create(CreateGroupDto dto)
     {
         try
         {
-            group.Id = Guid.NewGuid();
-            group.CreatedAt = DateTime.UtcNow;
-            group.IsActive = true;
+            // Mapeas el DTO a tu Entidad
+            var group = new Group
+            {
+                Id = Guid.NewGuid(),
+                Name = dto.Name,
+                Level = dto.Level,
+                InstitutionId = dto.InstitutionId,
+                ProfessorId = dto.ProfessorId,
+                CreatedAt = DateTime.UtcNow,
+                IsActive = true
+            };
 
             _context.Groups.Add(group);
             await _context.SaveChangesAsync();
@@ -71,6 +79,7 @@ public class GroupController : ControllerBase
             return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
         }
     }
+
 
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(Guid id, UpdateGroupDto updated)
@@ -145,6 +154,43 @@ public class GroupController : ControllerBase
             return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
         }
     }
+    [HttpGet("{id}/schedules")]
+    public async Task<ActionResult> GetGroupSchedules(Guid id)
+    {
+        try
+        {
+            Group? group = await _context.Groups.FindAsync(id);
+            if (group == null) return NotFound("Grupo no encontrado");
+
+            var schedules = await _context.Schedules
+                .Where(s => s.GroupId == id && s.IsActive)
+                .OrderBy(s => s.DayOfWeek)
+                .ThenBy(s => s.StartTime)
+                .Select(s => new
+                {
+                    scheduleId = s.Id,
+                    dayOfWeek = s.DayOfWeek,
+                    startTime = s.StartTime,
+                    endTime = s.EndTime,
+                    lateToleranceMinutes = s.LateToleranceMinutes
+                })
+                .ToListAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                groupId = id,
+                totalSchedules = schedules.Count,
+                schedules,
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
+    }
+
     [HttpPost("{id}/members")]
     public async Task<ActionResult> AddMemberToGroup(Guid id, [FromBody] assignUserToGroup request)
     {
@@ -233,6 +279,14 @@ public class assignUserToGroup
 }
 
 public class UpdateGroupDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string? Level { get; set; }
+    public Guid InstitutionId { get; set; }
+    public Guid ProfessorId { get; set; }
+}
+
+public class CreateGroupDto
 {
     public string Name { get; set; } = string.Empty;
     public string? Level { get; set; }

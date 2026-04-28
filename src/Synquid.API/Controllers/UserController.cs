@@ -295,6 +295,55 @@ public class UserController : ControllerBase
         }
     }
 
+    [HttpGet("{id}/groups")]
+    public async Task<ActionResult> GetUserGroups(string id)
+    {
+        try
+        {
+            if (!Guid.TryParse(id, out var userId))
+                return BadRequest("ID inválido");
+
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+            if (principal == null)
+                return Unauthorized("Token inválido o expirado");
+
+            User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
+
+            if (user == null)
+                return NotFound("Usuario no encontrado");
+
+            var groups = await _context.GroupMembers
+                .Include(gm => gm.Group)
+                .Where(gm => gm.UserId == userId && gm.IsActive && gm.Group.IsActive)
+                .Select(gm => new
+                {
+                    groupId = gm.Group.Id,
+                    groupName = gm.Group.Name,
+                    level = gm.Group.Level,
+                    institutionId = gm.Group.InstitutionId,
+                    professorId = gm.Group.ProfessorId,
+                    joinedAt = gm.JoinedAt
+                })
+                .OrderBy(g => g.groupName)
+                .ToListAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                userId,
+                totalGroups = groups.Count,
+                groups,
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
+    }
+
     [HttpPost("{id}/nfc")]
     public async Task<ActionResult> AssignNfcCard(string id, [FromBody] assignNfc nfcData)
     {
