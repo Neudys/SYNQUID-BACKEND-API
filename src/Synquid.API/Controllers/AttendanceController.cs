@@ -30,7 +30,6 @@ public class AttendanceController : ControllerBase
         _audit = audit;
     }
 
-
     [HttpGet("{id}")]
     public async Task<ActionResult> GetAttendanceRecord(string id)
     {
@@ -173,7 +172,6 @@ public class AttendanceController : ControllerBase
         }
     }
 
-    // POST /api/attendance/register
     [HttpPost("Register")]
     public async Task<ActionResult> Register([FromBody] RegisterRequest request)
     {
@@ -191,9 +189,10 @@ public class AttendanceController : ControllerBase
             User? user = await _context.Users.FirstOrDefaultAsync(u => u.Id == card.UserId);
             if (user == null) return NotFound("Usuario no encontrado para esta tarjeta");
             if (!user.IsActive) return BadRequest("El usuario asociado a esta tarjeta no está activo");
-            if (user.InstitutionId != device.InstitutionId) return BadRequest("El usuario no pertenece a la institución de este dispositivo");
+            if (user.InstitutionId != device.InstitutionId)
+                return BadRequest("El usuario no pertenece a la institución de este dispositivo");
 
-            _context.AttendanceRecords.Add(new AttendanceRecord
+            var attendanceRecord = new AttendanceRecord
             {
                 UserId = user.Id,
                 DeviceId = device.Id,
@@ -206,14 +205,86 @@ public class AttendanceController : ControllerBase
                 CreatedAt = DateTime.UtcNow,
                 Device = device,
                 User = user,
-            });
+            };
+            _context.AttendanceRecords.Add(attendanceRecord);
+            await _context.SaveChangesAsync();
+
+            DateOnly dateOnly = DateOnly.FromDateTime(request.timeStampLocal);
+            int dayOfWeek = (int)request.timeStampLocal.DayOfWeek;
+            TimeOnly currentTime = TimeOnly.FromDateTime(request.timeStampLocal);
+
+            var groupIds = await _context.GroupMembers
+                .Where(gm => gm.UserId == user.Id && gm.IsActive)
+                .Select(gm => gm.GroupId)
+                .ToListAsync();
+
+            if (groupIds.Count == 0)
+                return Ok(new { found = true, message = "Asistencia registrada pero usuario no está en ningún grupo", attendanceRecordId = attendanceRecord.Id });
+
+            Schedule? schedule = await _context.Schedules
+                .Include(s => s.Group)
+                .Where(s => groupIds.Contains(s.GroupId) &&
+                           s.DayOfWeek == dayOfWeek &&
+                           s.StartTime <= currentTime &&
+                           s.EndTime >= currentTime &&
+                           s.IsActive &&
+                           s.Group.IsActive)
+                .FirstOrDefaultAsync();
+
+            if (schedule == null)
+                return Ok(new
+                {
+                    found = true,
+                    scheduleFound = false,
+                    message = "Asistencia registrada pero no hay horario activo en esta hora",
+                    attendanceRecordId = attendanceRecord.Id
+                });
+
+            DailyAttendance? existing = await _context.DailyAttendances
+                .FirstOrDefaultAsync(da =>
+                    da.Date == dateOnly &&
+                    da.UserId == user.Id &&
+                    da.ScheduleId == schedule.Id);
+
+            string message;
+
+            if (existing != null)
+            {
+                // Ya tiene registro: el NFC nunca sobreescribe, el profesor manda
+                message = "Presencia ya registrada";
+            }
+            else
+            {
+                // Primera pasada del día: determinar si llegó a tiempo o tarde
+                bool isLate = currentTime > schedule.StartTime.AddMinutes(schedule.LateToleranceMinutes);
+                int status = isLate ? 3 : 0; // 3=Tarde, 0=Presente
+
+                existing = new DailyAttendance
+                {
+                    Date = dateOnly,
+                    UserId = user.Id,
+                    ScheduleId = schedule.Id,
+                    GroupId = schedule.GroupId,
+                    ProfessorId = schedule.Group.ProfessorId,
+                    Status = status,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                _context.DailyAttendances.Add(existing);
+                message = isLate ? "Alumno registrado como tarde" : "Alumno registrado como presente";
+            }
 
             await _context.SaveChangesAsync();
 
             return Ok(new
             {
                 found = true,
-                message = "Asistencia registrada correctamente"
+                scheduleFound = true,
+                message,
+                attendanceRecordId = attendanceRecord.Id,
+                dailyAttendanceId = existing.Id,
+                status = existing.Status,
+                timestamp = DateTime.UtcNow
             });
         }
         catch (Exception ex)
@@ -229,43 +300,121 @@ public class AttendanceController : ControllerBase
         try
         {
             var errors = new List<string>();
+            var successCount = 0;
 
             foreach (syncAttendance r in syncRequest)
             {
-                Guid moduleUid = Guid.Parse(r.ModuleUid);
-
-                Device? device = await _context.Devices.FirstOrDefaultAsync(d => d.Id == moduleUid);
-                if (device == null) { errors.Add($"Dispositivo {r.ModuleUid} no encontrado"); continue; }
-                if (!device.IsActive) { errors.Add($"Dispositivo {r.ModuleUid} no está activo"); continue; }
-
-                NfcCard? card = await _context.NfcCards.FirstOrDefaultAsync(c => c.HashUid == r.Uuid);
-                if (card == null) { errors.Add($"Tarjeta {r.Uuid} no encontrada"); continue; }
-                if (!card.IsActive) { errors.Add($"Tarjeta {r.Uuid} está revocada"); continue; }
-
-                User? user = await _context.Users.FirstOrDefaultAsync(u => u.Id == card.UserId);
-                if (user == null) { errors.Add($"Usuario no encontrado para tarjeta {r.Uuid}"); continue; }
-                if (!user.IsActive) { errors.Add($"Usuario {user.Id} no está activo"); continue; }
-                if (user.InstitutionId != device.InstitutionId) { errors.Add($"Usuario {user.Id} no pertenece a la institución del dispositivo"); continue; }
-
-                _context.AttendanceRecords.Add(new AttendanceRecord
+                try
                 {
-                    UserId = user.Id,
-                    DeviceId = device.Id,
-                    TimestampUtc = r.timeStampUtc,
-                    TimestampLocal = r.timeStampLocal,
-                    Type = 0,
-                    Status = 0,
-                    NfcHash = card.HashUid,
-                    IsSynced = r.IsSynced,
-                    CreatedAt = DateTime.UtcNow,
-                });
+                    Guid moduleUid = Guid.Parse(r.ModuleUid);
+
+                    Device? device = await _context.Devices.FirstOrDefaultAsync(d => d.Id == moduleUid);
+                    if (device == null) { errors.Add($"Dispositivo {r.ModuleUid} no encontrado"); continue; }
+                    if (!device.IsActive) { errors.Add($"Dispositivo {r.ModuleUid} no está activo"); continue; }
+
+                    NfcCard? card = await _context.NfcCards.FirstOrDefaultAsync(c => c.HashUid == r.Uuid);
+                    if (card == null) { errors.Add($"Tarjeta {r.Uuid} no encontrada"); continue; }
+                    if (!card.IsActive) { errors.Add($"Tarjeta {r.Uuid} está revocada"); continue; }
+
+                    User? user = await _context.Users.FirstOrDefaultAsync(u => u.Id == card.UserId);
+                    if (user == null) { errors.Add($"Usuario no encontrado para tarjeta {r.Uuid}"); continue; }
+                    if (!user.IsActive) { errors.Add($"Usuario {user.Id} no está activo"); continue; }
+                    if (user.InstitutionId != device.InstitutionId) { errors.Add($"Usuario {user.Id} no pertenece a la institución del dispositivo"); continue; }
+
+                    // Registrar en AttendanceRecords
+                    _context.AttendanceRecords.Add(new AttendanceRecord
+                    {
+                        UserId = user.Id,
+                        DeviceId = device.Id,
+                        TimestampUtc = r.timeStampUtc,
+                        TimestampLocal = r.timeStampLocal,
+                        Type = 0,
+                        Status = 0,
+                        NfcHash = card.HashUid,
+                        IsSynced = r.IsSynced,
+                        CreatedAt = DateTime.UtcNow,
+                    });
+
+                    // Obtener grupos y horario
+                    DateOnly dateOnly = DateOnly.FromDateTime(r.timeStampLocal);
+                    int dayOfWeek = (int)r.timeStampLocal.DayOfWeek;
+                    TimeOnly currentTime = TimeOnly.FromDateTime(r.timeStampLocal);
+
+                    var groupIds = await _context.GroupMembers
+                        .Where(gm => gm.UserId == user.Id && gm.IsActive)
+                        .Select(gm => gm.GroupId)
+                        .ToListAsync();
+
+                    if (groupIds.Count > 0)
+                    {
+                        Schedule? schedule = await _context.Schedules
+                            .Include(s => s.Group)
+                            .Where(s => groupIds.Contains(s.GroupId) &&
+                                       s.DayOfWeek == dayOfWeek &&
+                                       s.StartTime <= currentTime &&
+                                       s.EndTime >= currentTime &&
+                                       s.IsActive &&
+                                       s.Group.IsActive)
+                            .FirstOrDefaultAsync();
+
+                        if (schedule != null)
+                        {
+                            var lastDailyAttendance = await _context.DailyAttendances
+                                .Where(da => da.Date == dateOnly &&
+                                            da.UserId == user.Id &&
+                                            da.ScheduleId == schedule.Id)
+                                .OrderByDescending(da => da.CreatedAt)
+                                .FirstOrDefaultAsync();
+
+                            if (lastDailyAttendance == null)
+                            {
+                                _context.DailyAttendances.Add(new DailyAttendance
+                                {
+                                    Date = DateOnly.FromDateTime(r.timeStampLocal),
+                                    UserId = user.Id,
+                                    ScheduleId = schedule.Id,
+                                    GroupId = schedule.GroupId,
+                                    ProfessorId = schedule.Group.ProfessorId,
+                                    Status = 0,
+                                    CreatedAt = DateTime.UtcNow,
+                                    UpdatedAt = DateTime.UtcNow
+                                });
+                            }
+                            else if (lastDailyAttendance.Status == 0)
+                            {
+                                lastDailyAttendance.Status = 1;
+                                lastDailyAttendance.UpdatedAt = DateTime.UtcNow;
+                            }
+                            else
+                            {
+                                _context.DailyAttendances.Add(new DailyAttendance
+                                {
+                                    Date = DateOnly.FromDateTime(r.timeStampLocal),
+                                    UserId = user.Id,
+                                    ScheduleId = schedule.Id,
+                                    GroupId = schedule.GroupId,
+                                    ProfessorId = schedule.Group.ProfessorId,
+                                    Status = 0,
+                                    CreatedAt = DateTime.UtcNow,
+                                    UpdatedAt = DateTime.UtcNow
+                                });
+                            }
+                        }
+                    }
+
+                    successCount++;
+                }
+                catch (Exception itemEx)
+                {
+                    errors.Add($"Error procesando sincronización: {itemEx.Message}");
+                }
             }
 
             await _context.SaveChangesAsync();
 
             return Ok(new
             {
-                processed = syncRequest.Count - errors.Count,
+                processed = successCount,
                 failed = errors.Count,
                 errors
             });
@@ -288,7 +437,9 @@ public class AttendanceController : ControllerBase
             string authHeader = Request.Headers["Authorization"].ToString();
             ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
             if (principal == null) return Unauthorized("Token invalido");
-            string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+
+            string? profesorId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+            if (profesorId == null) return Unauthorized("No se pudo obtener el ID del profesor");
 
             _context.AttendanceRecords.Add(new AttendanceRecord
             {
@@ -300,9 +451,49 @@ public class AttendanceController : ControllerBase
                 Status = manualChange.status,
                 NfcHash = null,
                 IsSynced = true,
-                RegisteredById = Guid.Parse(manualChange.profesorId),
+                RegisteredById = Guid.Parse(profesorId),
                 CreatedAt = DateTime.UtcNow,
             });
+
+            if (!string.IsNullOrEmpty(manualChange.scheduleId))
+            {
+                Schedule? schedule = await _context.Schedules
+                    .Include(s => s.Group)
+                    .FirstOrDefaultAsync(s => s.Id == Guid.Parse(manualChange.scheduleId) && s.IsActive);
+
+                if (schedule != null)
+                {
+                    DateOnly dateOnly = DateOnly.FromDateTime(DateTime.Now);
+                    var lastDailyAttendance = await _context.DailyAttendances
+                        .Where(da => da.Date == dateOnly &&
+                                    da.UserId == Guid.Parse(manualChange.userId) &&
+                                    da.ScheduleId == schedule.Id)
+                        .OrderByDescending(da => da.CreatedAt)
+                        .FirstOrDefaultAsync();
+
+                    if (lastDailyAttendance == null)
+                    {
+                        _context.DailyAttendances.Add(new DailyAttendance
+                        {
+                            Date = DateOnly.FromDateTime(DateTime.Now),
+                            UserId = Guid.Parse(manualChange.userId),
+                            ScheduleId = schedule.Id,
+                            GroupId = schedule.GroupId,
+                            ProfessorId = schedule.Group.ProfessorId,
+                            Status = manualChange.status,
+                            ModifiedById = Guid.Parse(profesorId),
+                            CreatedAt = DateTime.UtcNow,
+                            UpdatedAt = DateTime.UtcNow
+                        });
+                    }
+                    else
+                    {
+                        lastDailyAttendance.Status = manualChange.status;
+                        lastDailyAttendance.ModifiedById = Guid.Parse(profesorId);
+                        lastDailyAttendance.UpdatedAt = DateTime.UtcNow;
+                    }
+                }
+            }
 
             await _context.SaveChangesAsync();
 
@@ -379,40 +570,88 @@ public class AttendanceController : ControllerBase
     {
         try
         {
-            string token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
-            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(token, _config);
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
             if (principal == null) return Unauthorized("Token inválido");
 
-            if (!Guid.TryParse(attendance.userId, out var userId))
-                return BadRequest("userId no es un Guid válido");
+            string? professorIdStr = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+            if (!Guid.TryParse(professorIdStr, out var professorId))
+                return Unauthorized("Token no contiene un ID válido");
 
             if (!Guid.TryParse(attendance.groupId, out var groupId))
                 return BadRequest("groupId no es un Guid válido");
 
-            User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == userId);
-            Group? group = await _context.Groups.FirstOrDefaultAsync(x => x.Id == groupId);
+            Group? group = await _context.Groups
+                .Include(g => g.Members.Where(m => m.IsActive))
+                    .ThenInclude(m => m.User)
+                .Include(g => g.Schedules.Where(s => s.IsActive))
+                .FirstOrDefaultAsync(g => g.Id == groupId && g.IsActive);
 
             if (group == null) return NotFound("Grupo no encontrado");
-            if (user == null) return NotFound("Profesor no encontrado");
-            if (group.ProfessorId != user.Id)
-                return BadRequest("el profesor no esta asignado al grupo");
+            if (group.ProfessorId != professorId)
+                return Forbid();
 
-            var fromUtc = DateTime.SpecifyKind(attendance.from, DateTimeKind.Utc);
-            var toUtc = DateTime.SpecifyKind(attendance.to, DateTimeKind.Utc);
+            DateOnly fromDate = DateOnly.FromDateTime(attendance.from.Date);
+            DateOnly toDate = DateOnly.FromDateTime(attendance.to.Date);
 
-            List<AttendanceRecord> records = await _context.AttendanceRecords
-                .Where(x =>
-                    x.TimestampUtc >= fromUtc &&
-                    x.TimestampUtc <= toUtc)
-                .Skip((attendance.page - 1) * attendance.limit)
-                .Take(attendance.limit)
+            int page = attendance.page < 1 ? 1 : attendance.page;
+            int limit = attendance.limit < 1 ? 50 : attendance.limit;
+
+            var attendances = await _context.DailyAttendances
+                .Include(da => da.User)
+                .Include(da => da.Schedule)
+                .Where(da =>
+                    da.GroupId == groupId &&
+                    da.Date >= fromDate &&
+                    da.Date <= toDate)
+                .OrderBy(da => da.Date)
+                .ThenBy(da => da.User.FirstName)
+                .Skip((page - 1) * limit)
+                .Take(limit)
+                .ToListAsync();
+
+            var rawRecords = await _context.AttendanceRecords
+                .Where(ar =>
+                    ar.TimestampLocal.Date >= attendance.from.Date &&
+                    ar.TimestampLocal.Date <= attendance.to.Date &&
+                    _context.GroupMembers.Any(gm => gm.GroupId == groupId && gm.UserId == ar.UserId && gm.IsActive))
+                .OrderBy(ar => ar.TimestampLocal)
                 .ToListAsync();
 
             return Ok(new
             {
+                codigoError = 0,
                 groupId = group.Id,
-                total = records.Count,
-                records
+                groupName = group.Name,
+                from = fromDate.ToString("yyyy-MM-dd"),
+                to = toDate.ToString("yyyy-MM-dd"),
+                page,
+                limit,
+                total = attendances.Count,
+                attendances = attendances.Select(da => new
+                {
+                    id = da.Id,
+                    date = da.Date.ToString("yyyy-MM-dd"),
+                    userId = da.UserId,
+                    userName = $"{da.User.FirstName} {da.User.LastName}",
+                    scheduleId = da.ScheduleId,
+                    startTime = da.Schedule.StartTime.ToString("HH:mm"),
+                    endTime = da.Schedule.EndTime.ToString("HH:mm"),
+                    status = da.Status,
+                    modifiedById = da.ModifiedById,
+                    createdAt = da.CreatedAt,
+                    updatedAt = da.UpdatedAt
+                }),
+                rawRecords = rawRecords.Select(ar => new
+                {
+                    id = ar.Id,
+                    userId = ar.UserId,
+                    timestampLocal = ar.TimestampLocal,
+                    timestampUtc = ar.TimestampUtc,
+                    type = ar.Type,
+                    status = ar.Status
+                }),
+                timestamp = DateTime.UtcNow
             });
         }
         catch (Exception ex)
@@ -422,27 +661,232 @@ public class AttendanceController : ControllerBase
     }
 
     [HttpGet("myHistory")]
-    public async Task<ActionResult> myHistory([FromQuery] historyAttendance attendance)
+    public async Task<ActionResult> myHistory([FromQuery] myHistoryRequest request)
     {
         try
         {
-            string token = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
-            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(token, _config);
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
             if (principal == null) return Unauthorized("Token inválido");
 
-            User? user = await _context.Users.FirstOrDefaultAsync(x => x.Id == Guid.Parse(attendance.userId));
+            string? userIdStr = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+            if (!Guid.TryParse(userIdStr, out var userId))
+                return Unauthorized("Token no contiene un ID válido");
 
-            if (user == null) return NotFound("Profesor no encontrado");
+            int page = request.page < 1 ? 1 : request.page;
+            int limit = request.limit < 1 ? 50 : request.limit;
 
-            List<AttendanceRecord> records = await _context.AttendanceRecords
-               .Where(x => x.TimestampUtc.Date >= attendance.from && x.TimestampUtc.Date <= attendance.to && x.UserId == Guid.Parse(attendance.userId))
-               .Skip((attendance.page - 1) * attendance.limit)
-               .ToListAsync();
+            DateOnly fromDate = DateOnly.FromDateTime(request.from.Date);
+            DateOnly toDate = DateOnly.FromDateTime(request.to.Date);
+
+            var attendances = await _context.DailyAttendances
+                .Include(da => da.Schedule)
+                .Include(da => da.Group)
+                .Where(da => da.UserId == userId && da.Date >= fromDate && da.Date <= toDate)
+                .OrderByDescending(da => da.Date)
+                .ThenBy(da => da.Schedule.StartTime)
+                .Skip((page - 1) * limit)
+                .Take(limit)
+                .ToListAsync();
 
             return Ok(new
             {
-                total = records.Count,
-                records
+                codigoError = 0,
+                from = fromDate.ToString("yyyy-MM-dd"),
+                to = toDate.ToString("yyyy-MM-dd"),
+                page,
+                limit,
+                total = attendances.Count,
+                attendances = attendances.Select(da => new
+                {
+                    id = da.Id,
+                    date = da.Date.ToString("yyyy-MM-dd"),
+                    groupId = da.GroupId,
+                    groupName = da.Group.Name,
+                    scheduleId = da.ScheduleId,
+                    startTime = da.Schedule.StartTime.ToString("HH:mm"),
+                    endTime = da.Schedule.EndTime.ToString("HH:mm"),
+                    status = da.Status,
+                    createdAt = da.CreatedAt
+                }),
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
+    }
+
+    [HttpPut("daily")]
+    public async Task<ActionResult> UpsertDailyAttendance([FromBody] UpsertDailyRequest request)
+    {
+        try
+        {
+            Console.WriteLine($"[daily/upsert] >>> Inicio. userId={request.UserId} groupId={request.GroupId} scheduleId={request.ScheduleId} date={request.Date:yyyy-MM-dd} status={request.Status}");
+
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+            if (principal == null) return Unauthorized("Token inválido o expirado");
+
+            string? professorIdStr = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+            if (!Guid.TryParse(professorIdStr, out var professorId))
+                return Unauthorized("Token no contiene un ID válido");
+
+            if (!Guid.TryParse(request.UserId, out var userId))
+                return BadRequest("userId inválido");
+
+            if (request.Status < 0 || request.Status > 3)
+                return BadRequest("Status inválido. Valores: 0=Presente, 1=Ausente, 2=Justificado, 3=Tarde");
+
+            DateOnly date = DateOnly.FromDateTime(request.Date.Date);
+            int dayOfWeek = (int)request.Date.DayOfWeek;
+
+            Schedule? schedule = null;
+
+            if (!string.IsNullOrEmpty(request.ScheduleId) && Guid.TryParse(request.ScheduleId, out var scheduleId))
+            {
+                schedule = await _context.Schedules
+                    .Include(s => s.Group)
+                    .FirstOrDefaultAsync(s => s.Id == scheduleId && s.IsActive);
+            }
+            else if (!string.IsNullOrEmpty(request.GroupId) && Guid.TryParse(request.GroupId, out var groupId))
+            {
+                var studentGroupIds = await _context.GroupMembers
+                    .Where(gm => gm.UserId == userId && gm.GroupId == groupId && gm.IsActive)
+                    .Select(gm => gm.GroupId)
+                    .ToListAsync();
+
+                schedule = await _context.Schedules
+                    .Include(s => s.Group)
+                    .Where(s => studentGroupIds.Contains(s.GroupId) && s.DayOfWeek == dayOfWeek && s.IsActive && s.Group.IsActive)
+                    .FirstOrDefaultAsync();
+
+                if (schedule == null)
+                {
+                    schedule = await _context.Schedules
+                        .Include(s => s.Group)
+                        .Where(s => studentGroupIds.Contains(s.GroupId) && s.IsActive && s.Group.IsActive)
+                        .FirstOrDefaultAsync();
+                }
+            }
+
+            if (schedule == null) return NotFound("El grupo no tiene ningún horario activo");
+            if (schedule.Group.ProfessorId != professorId) return Forbid();
+
+            User? student = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && u.IsActive);
+            if (student == null) return NotFound("Alumno no encontrado");
+
+            DailyAttendance? existing = await _context.DailyAttendances
+                .FirstOrDefaultAsync(da =>
+                    da.UserId == userId &&
+                    da.ScheduleId == schedule.Id &&
+                    da.Date == date);
+
+            bool created = false;
+
+            if (existing != null)
+            {
+                existing.Status = request.Status;
+                existing.ModifiedById = professorId;
+                existing.UpdatedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                existing = new DailyAttendance
+                {
+                    Date = date,
+                    UserId = userId,
+                    ScheduleId = schedule.Id,
+                    GroupId = schedule.GroupId,
+                    ProfessorId = schedule.Group.ProfessorId,
+                    Status = request.Status,
+                    ModifiedById = professorId,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                };
+                _context.DailyAttendances.Add(existing);
+                created = true;
+            }
+
+            _context.AttendanceRecords.Add(new AttendanceRecord
+            {
+                UserId = userId,
+                DeviceId = null,
+                TimestampUtc = DateTime.UtcNow,
+                TimestampLocal = DateTime.Now,
+                Type = 1,
+                Status = request.Status,
+                NfcHash = null,
+                IsSynced = true,
+                RegisteredById = professorId,
+                CreatedAt = DateTime.UtcNow
+            });
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                created,
+                id = existing.Id,
+                userId = existing.UserId,
+                scheduleId = existing.ScheduleId,
+                date = existing.Date.ToString("yyyy-MM-dd"),
+                status = existing.Status,
+                modifiedById = existing.ModifiedById,
+                updatedAt = existing.UpdatedAt,
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
+    }
+
+    [HttpGet("daily/group/{groupId}")]
+    public async Task<ActionResult> GetDailyAttendanceByGroup(string groupId, [FromQuery] DateTime? date)
+    {
+        try
+        {
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+            if (principal == null) return Unauthorized("Token inválido o expirado");
+
+            if (!Guid.TryParse(groupId, out var gid))
+                return BadRequest("groupId inválido");
+
+            Group? group = await _context.Groups.FirstOrDefaultAsync(g => g.Id == gid && g.IsActive);
+            if (group == null) return NotFound("Grupo no encontrado");
+
+            DateTime targetDate = (date ?? DateTime.Now).Date;
+
+            var attendances = await _context.DailyAttendances
+                .Include(da => da.User)
+                .Include(da => da.Schedule)
+                .Where(da => da.GroupId == gid && da.Date == DateOnly.FromDateTime(targetDate))
+                .OrderBy(da => da.User.FirstName)
+                .ThenBy(da => da.User.LastName)
+                .ToListAsync();
+
+            return Ok(new
+            {
+                codigoError = 0,
+                groupId = gid,
+                date = targetDate,
+                totalRecords = attendances.Count,
+                attendances = attendances.Select(da => new
+                {
+                    id = da.Id,
+                    userId = da.UserId,
+                    userName = $"{da.User.FirstName} {da.User.LastName}",
+                    scheduleId = da.ScheduleId,
+                    status = da.Status,
+                    createdAt = da.CreatedAt,
+                    updatedAt = da.UpdatedAt
+                }),
+                timestamp = DateTime.UtcNow
             });
         }
         catch (Exception ex)
@@ -471,6 +915,7 @@ public class statsRequest
     public DateTime from { get; set; } = DateTime.UtcNow.AddDays(-30);
     public DateTime to { get; set; } = DateTime.UtcNow;
 }
+
 public class CheckRequest
 {
     public string Uid { get; set; } = string.Empty;
@@ -480,10 +925,9 @@ public class historyAttendance
 {
     public DateTime from { get; set; } = DateTime.Now;
     public DateTime to { get; set; } = DateTime.Now;
-    public string userId { get; set; } = string.Empty;
     public string groupId { get; set; } = string.Empty;
-    public int page { get; set; } = 0;
-    public int limit { get; set; } = 0;
+    public int page { get; set; } = 1;
+    public int limit { get; set; } = 50;
 }
 
 public class RegisterRequest
@@ -510,10 +954,33 @@ public class manual
     public string profesorId { get; set; } = string.Empty;
     public int status { get; set; } = 0;
     public string notes { get; set; } = string.Empty;
+    public string? scheduleId { get; set; } // Opcional para asociar a horario
 }
 
 public class todayAttendance
 {
     public string groupId { get; set; } = string.Empty;
     public string institutionId { get; set; } = string.Empty;
+}
+
+public class myHistoryRequest
+{
+    public DateTime from { get; set; } = DateTime.Now.AddDays(-30);
+    public DateTime to { get; set; } = DateTime.Now;
+    public int page { get; set; } = 1;
+    public int limit { get; set; } = 50;
+}
+
+public class UpdateDailyStatusRequest
+{
+    public int Status { get; set; }
+}
+
+public class UpsertDailyRequest
+{
+    public string UserId { get; set; } = string.Empty;
+    public string? ScheduleId { get; set; }   // opcional si se manda GroupId
+    public string? GroupId { get; set; }       // alternativa a ScheduleId
+    public DateTime Date { get; set; } = DateTime.Now;
+    public int Status { get; set; }
 }

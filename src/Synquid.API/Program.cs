@@ -6,6 +6,8 @@ using Synquid.Application.Interfaces;
 using Synquid.Infrastructure.Data;
 using Synquid.Infrastructure.Services;
 
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+
 var builder = WebApplication.CreateBuilder(args);
 
 //Agregar autenticación JWT

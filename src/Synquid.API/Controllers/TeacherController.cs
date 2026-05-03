@@ -148,4 +148,74 @@ public class TeacherController : ControllerBase
             return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
         }
     }
+
+    [HttpGet("schedule")]
+    public async Task<ActionResult> GetSchedule([FromQuery] string? from, [FromQuery] string? to)
+    {
+        try
+        {
+            string authHeader = Request.Headers["Authorization"].ToString();
+            ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
+
+            if (principal == null)
+                return Unauthorized("Token inválido o expirado");
+
+            string? userId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+            string? roleStr = principal.FindFirst("role")?.Value;
+
+            if (!int.TryParse(roleStr, out int role) || role > 2)
+                return Forbid();
+
+            if (!Guid.TryParse(userId, out Guid uid))
+                return BadRequest("userId inválido");
+
+            DateTime fromDate = from != null && DateTime.TryParse(from, out DateTime parsedFrom)
+                ? parsedFrom.Date
+                : DateTime.UtcNow.Date;
+
+            DateTime toDate = to != null && DateTime.TryParse(to, out DateTime parsedTo)
+                ? parsedTo.Date
+                : fromDate.AddDays(6);
+
+            // Calcula los días de la semana presentes en el rango
+            List<int> daysInRange = new List<int>();
+            for (DateTime d = fromDate; d <= toDate; d = d.AddDays(1))
+                daysInRange.Add((int)d.DayOfWeek);
+
+            daysInRange = daysInRange.Distinct().ToList();
+
+            List<Schedule> slots = await _context.Schedules
+                .Include(s => s.Group)
+                .Where(s => s.Group.ProfessorId == uid && s.IsActive && s.Group.IsActive && daysInRange.Contains(s.DayOfWeek))
+                .OrderBy(s => s.DayOfWeek).ThenBy(s => s.StartTime)
+                .ToListAsync();
+
+            var data = slots.Select(s => new
+            {
+                scheduleId = s.Id,
+                groupId = s.GroupId,
+                groupName = s.Group.Name,
+                level = s.Group.Level,
+                institutionId = s.Group.InstitutionId,
+                dayOfWeek = s.DayOfWeek,
+                startTime = s.StartTime.ToString("HH:mm"),
+                endTime = s.EndTime.ToString("HH:mm"),
+                lateToleranceMinutes = s.LateToleranceMinutes
+            });
+
+            return Ok(new
+            {
+                codigoError = 0,
+                from = fromDate.ToString("yyyy-MM-dd"),
+                to = toDate.ToString("yyyy-MM-dd"),
+                data,
+                total = data.Count(),
+                timestamp = DateTime.UtcNow
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error interno del servidor", error = ex.Message });
+        }
+    }
 }
