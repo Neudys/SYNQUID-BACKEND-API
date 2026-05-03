@@ -91,10 +91,12 @@ public class StudentController : ControllerBase
             if (!Guid.TryParse(userId, out Guid uid))
                 return BadRequest("userId inválido");
 
+            // si no mandan fecha usa hoy como default
             DateTime targetDate = date != null && DateTime.TryParse(date, out DateTime parsed)
                 ? parsed
                 : DateTime.UtcNow.Date;
 
+            // extrae el dia de la semana para filtrar los horarios que corresponden
             int dayOfWeek = (int)targetDate.DayOfWeek;
 
             List<Guid> groupIds = await _context.GroupMembers

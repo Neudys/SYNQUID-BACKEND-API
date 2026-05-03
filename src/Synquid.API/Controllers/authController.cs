@@ -149,6 +149,7 @@ public class AuthController : ControllerBase
 
             try
             {
+                // genera token unico y lo guarda con expiracion de 15 minutos
                 string resetToken = Guid.NewGuid().ToString();
 
                 var passwordResetToken = new PasswordResetToken
@@ -197,12 +198,14 @@ public class AuthController : ControllerBase
     {
         try
         {
+            // busca token valido que no haya sido usado
             var resetToken = await _context.PasswordResetTokens
                 .FirstOrDefaultAsync(t => t.Token == request.token && !t.IsUsed);
 
             if (resetToken == null)
                 return BadRequest("Token inválido o expirado");
 
+            // valida que el token no haya expirado (15 min de vida)
             if (resetToken.ExpiresAt < DateTime.UtcNow)
                 return BadRequest("El token de reset ha expirado");
 
@@ -211,6 +214,7 @@ public class AuthController : ControllerBase
             if (user == null)
                 return NotFound("Usuario no encontrado");
 
+            // hashea la nueva password y marca el token como consumido
             user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.newPassword);
             user.UpdatedAt = DateTime.UtcNow;
 
@@ -258,6 +262,7 @@ public class AuthController : ControllerBase
         Mensaje.Body = body;
         Mensaje.IsBodyHtml = true;
 
+        // configura el cliente SMTP con credenciales de gmail y SSL en puerto 587
         using (var smtp = new SmtpClient())
         {
             var credencial = new NetworkCredential
@@ -334,9 +339,11 @@ public class AuthController : ControllerBase
         var audience = _config["JwtSettings:Audience"];
         var expiryMinutes = double.Parse(_config["JwtSettings:ExpiryMinutes"] ?? "1440");
 
+        // crea la key simetrica y firma con HMAC-SHA256
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey!));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
+        // arma los claims con los datos del usuario que el cliente necesita
         var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
@@ -345,6 +352,7 @@ public class AuthController : ControllerBase
             new Claim("institutionId", user.InstitutionId?.ToString() ?? "")
         };
 
+        // genera el JWT con expiracion configurable (default 1440 min = 24h)
         var token = new JwtSecurityToken(
             issuer: issuer,
             audience: audience,

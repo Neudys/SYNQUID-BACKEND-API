@@ -202,14 +202,13 @@ public class GroupController : ControllerBase
             User? user = await _context.Users.FindAsync(Guid.Parse(request.userId));
             if (user == null) return NotFound("Usuario no encontrado");
 
-            // Verificar si ya existe en el grupo y está activo
             bool alreadyExists = await _context.GroupMembers
                 .AnyAsync(gm => gm.GroupId == id && gm.UserId == Guid.Parse(request.userId) && gm.IsActive);
 
             if (alreadyExists)
                 return BadRequest("El usuario ya es miembro de este grupo");
 
-            // Comprobar si existe inactivo para reactivarlo
+            // si existe pero inactivo lo reactiva en vez de crear duplicado
             GroupMember? existingMember = await _context.GroupMembers
                 .FirstOrDefaultAsync(gm => gm.GroupId == id && gm.UserId == Guid.Parse(request.userId) && !gm.IsActive);
 

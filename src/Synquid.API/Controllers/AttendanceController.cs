@@ -114,6 +114,7 @@ public class AttendanceController : ControllerBase
                 .OrderBy(a => a.TimestampUtc)
                 .ToListAsync();
 
+            // construye el CSV manualmente concatenando cada fila
             var csv = "UserId,UserName,DeviceId,TimestampUTC,TimestampLocal,Type,Status,IsSynced\n";
 
             foreach (var record in records)
@@ -148,6 +149,7 @@ public class AttendanceController : ControllerBase
                 .Where(a => a.TimestampUtc.Date >= from && a.TimestampUtc.Date <= to)
                 .ToListAsync();
 
+            // agrupa conteos por cada estado posible
             int totalRecords = records.Count;
             int presentCount = records.Count(a => a.Status == 0);
             int absentCount = records.Count(a => a.Status == 1);
@@ -180,6 +182,7 @@ public class AttendanceController : ControllerBase
             Guid moduleUid = Guid.Parse(request.ModuleUid);
             Guid cardUid = Guid.Parse(request.Uuid);
 
+            // valida la cadena: dispositivo -> tarjeta -> usuario -> misma institucion
             Device? device = await _context.Devices.FirstOrDefaultAsync(d => d.Id == moduleUid);
             if (device == null) return NotFound("Dispositivo no encontrado");
 
@@ -192,6 +195,7 @@ public class AttendanceController : ControllerBase
             if (user.InstitutionId != device.InstitutionId)
                 return BadRequest("El usuario no pertenece a la institución de este dispositivo");
 
+            // guarda el registro raw independientemente de si hay horario o no
             var attendanceRecord = new AttendanceRecord
             {
                 UserId = user.Id,
@@ -209,10 +213,12 @@ public class AttendanceController : ControllerBase
             _context.AttendanceRecords.Add(attendanceRecord);
             await _context.SaveChangesAsync();
 
+            // extrae fecha y hora local para buscar el horario correspondiente
             DateOnly dateOnly = DateOnly.FromDateTime(request.timeStampLocal);
             int dayOfWeek = (int)request.timeStampLocal.DayOfWeek;
             TimeOnly currentTime = TimeOnly.FromDateTime(request.timeStampLocal);
 
+            // busca los grupos activos del usuario para filtrar horarios
             var groupIds = await _context.GroupMembers
                 .Where(gm => gm.UserId == user.Id && gm.IsActive)
                 .Select(gm => gm.GroupId)
@@ -221,6 +227,7 @@ public class AttendanceController : ControllerBase
             if (groupIds.Count == 0)
                 return Ok(new { found = true, message = "Asistencia registrada pero usuario no está en ningún grupo", attendanceRecordId = attendanceRecord.Id });
 
+            // busca el horario activo que coincida con el dia y la hora actual
             Schedule? schedule = await _context.Schedules
                 .Include(s => s.Group)
                 .Where(s => groupIds.Contains(s.GroupId) &&
@@ -240,6 +247,7 @@ public class AttendanceController : ControllerBase
                     attendanceRecordId = attendanceRecord.Id
                 });
 
+            // verifica si ya existe un DailyAttendance para este alumno/horario/dia
             DailyAttendance? existing = await _context.DailyAttendances
                 .FirstOrDefaultAsync(da =>
                     da.Date == dateOnly &&
@@ -250,12 +258,12 @@ public class AttendanceController : ControllerBase
 
             if (existing != null)
             {
-                // Ya tiene registro: el NFC nunca sobreescribe, el profesor manda
+                // el NFC nunca sobreescribe una decision ya tomada, el profesor manda
                 message = "Presencia ya registrada";
             }
             else
             {
-                // Primera pasada del día: determinar si llegó a tiempo o tarde
+                // primera pasada: calcula si llego dentro de la tolerancia o tarde
                 bool isLate = currentTime > schedule.StartTime.AddMinutes(schedule.LateToleranceMinutes);
                 int status = isLate ? 3 : 0; // 3=Tarde, 0=Presente
 
@@ -299,6 +307,7 @@ public class AttendanceController : ControllerBase
     {
         try
         {
+            // acumula errores por item para devolver un reporte parcial al final
             var errors = new List<string>();
             var successCount = 0;
 
@@ -312,6 +321,7 @@ public class AttendanceController : ControllerBase
                     if (device == null) { errors.Add($"Dispositivo {r.ModuleUid} no encontrado"); continue; }
                     if (!device.IsActive) { errors.Add($"Dispositivo {r.ModuleUid} no está activo"); continue; }
 
+                    // sync busca por HashUid porque el dispositivo manda el hash, no el id
                     NfcCard? card = await _context.NfcCards.FirstOrDefaultAsync(c => c.HashUid == r.Uuid);
                     if (card == null) { errors.Add($"Tarjeta {r.Uuid} no encontrada"); continue; }
                     if (!card.IsActive) { errors.Add($"Tarjeta {r.Uuid} está revocada"); continue; }
@@ -321,7 +331,6 @@ public class AttendanceController : ControllerBase
                     if (!user.IsActive) { errors.Add($"Usuario {user.Id} no está activo"); continue; }
                     if (user.InstitutionId != device.InstitutionId) { errors.Add($"Usuario {user.Id} no pertenece a la institución del dispositivo"); continue; }
 
-                    // Registrar en AttendanceRecords
                     _context.AttendanceRecords.Add(new AttendanceRecord
                     {
                         UserId = user.Id,
@@ -335,7 +344,7 @@ public class AttendanceController : ControllerBase
                         CreatedAt = DateTime.UtcNow,
                     });
 
-                    // Obtener grupos y horario
+                    // misma logica de horario que Register pero sin respuesta intermedia
                     DateOnly dateOnly = DateOnly.FromDateTime(r.timeStampLocal);
                     int dayOfWeek = (int)r.timeStampLocal.DayOfWeek;
                     TimeOnly currentTime = TimeOnly.FromDateTime(r.timeStampLocal);
@@ -438,6 +447,7 @@ public class AttendanceController : ControllerBase
             ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
             if (principal == null) return Unauthorized("Token invalido");
 
+            // extrae el id del profesor desde el token para registrar quien hizo el cambio
             string? profesorId = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
             if (profesorId == null) return Unauthorized("No se pudo obtener el ID del profesor");
 
@@ -588,6 +598,7 @@ public class AttendanceController : ControllerBase
                 .FirstOrDefaultAsync(g => g.Id == groupId && g.IsActive);
 
             if (group == null) return NotFound("Grupo no encontrado");
+            // solo el profesor dueno del grupo puede ver su historial
             if (group.ProfessorId != professorId)
                 return Forbid();
 
@@ -597,6 +608,7 @@ public class AttendanceController : ControllerBase
             int page = attendance.page < 1 ? 1 : attendance.page;
             int limit = attendance.limit < 1 ? 50 : attendance.limit;
 
+            // consulta el resumen diario (procesado) y los registros raw del dispositivo por separado
             var attendances = await _context.DailyAttendances
                 .Include(da => da.User)
                 .Include(da => da.Schedule)
@@ -744,6 +756,7 @@ public class AttendanceController : ControllerBase
 
             Schedule? schedule = null;
 
+            // resuelve el horario: primero intenta por scheduleId directo, sino por groupId
             if (!string.IsNullOrEmpty(request.ScheduleId) && Guid.TryParse(request.ScheduleId, out var scheduleId))
             {
                 schedule = await _context.Schedules
@@ -757,11 +770,13 @@ public class AttendanceController : ControllerBase
                     .Select(gm => gm.GroupId)
                     .ToListAsync();
 
+                // intenta coincidir con el dia de la semana de la fecha enviada
                 schedule = await _context.Schedules
                     .Include(s => s.Group)
                     .Where(s => studentGroupIds.Contains(s.GroupId) && s.DayOfWeek == dayOfWeek && s.IsActive && s.Group.IsActive)
                     .FirstOrDefaultAsync();
 
+                // fallback: si no hay horario ese dia, toma cualquier horario activo del grupo
                 if (schedule == null)
                 {
                     schedule = await _context.Schedules
@@ -772,6 +787,7 @@ public class AttendanceController : ControllerBase
             }
 
             if (schedule == null) return NotFound("El grupo no tiene ningún horario activo");
+            // verifica que el profesor del token sea dueno del grupo
             if (schedule.Group.ProfessorId != professorId) return Forbid();
 
             User? student = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && u.IsActive);
@@ -783,6 +799,7 @@ public class AttendanceController : ControllerBase
                     da.ScheduleId == schedule.Id &&
                     da.Date == date);
 
+            // upsert: actualiza si ya existe, crea si no
             bool created = false;
 
             if (existing != null)
@@ -809,6 +826,7 @@ public class AttendanceController : ControllerBase
                 created = true;
             }
 
+            // siempre genera un AttendanceRecord manual como trazabilidad del cambio
             _context.AttendanceRecords.Add(new AttendanceRecord
             {
                 UserId = userId,

@@ -129,6 +129,7 @@ public class NfcController : ControllerBase
             Institution? institution = await _context.Institutions.FirstOrDefaultAsync(i => i.Id == institutionId);
             if (institution == null) return NotFound("Institución no encontrada");
 
+            // crea el usuario si no existe en esta institucion
             User? user = await _context.Users.FirstOrDefaultAsync(u => u.Email == request.Email && u.InstitutionId == institutionId);
 
             if (user == null)
@@ -146,6 +147,7 @@ public class NfcController : ControllerBase
                 await _context.SaveChangesAsync();
             }
 
+            // crea la tarjeta si no existe, o reasigna si ya existia
             NfcCard? card = await _context.NfcCards.FirstOrDefaultAsync(c => c.Id == cardUid);
 
             if (card == null)
@@ -265,6 +267,7 @@ public class NfcController : ControllerBase
 
     private string HashUid(string uid)
     {
+        // hashea el uid con SHA256 para no almacenar el valor en claro en la BD
         using (var sha256 = System.Security.Cryptography.SHA256.Create())
         {
             byte[] hashedBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(uid));

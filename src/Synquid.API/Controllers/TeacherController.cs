@@ -38,9 +38,11 @@ public class TeacherController : ControllerBase
             if (!int.TryParse(roleStr, out int role) || role > 2)
                 return Forbid();
 
+            // el profesor (role=2) solo puede ver sus propios grupos, admin puede ver de cualquiera
             if (role == 2 && teacherId != null && teacherId != userId)
                 return Forbid();
 
+            // si es profesor filtra por su id, si es admin filtra por teacherId o trae todos
             Guid filterBy = role == 2
                 ? Guid.Parse(userId!)
                 : (teacherId != null ? Guid.Parse(teacherId) : Guid.Empty);
@@ -177,7 +179,7 @@ public class TeacherController : ControllerBase
                 ? parsedTo.Date
                 : fromDate.AddDays(6);
 
-            // Calcula los días de la semana presentes en el rango
+            // calcula los dias de semana unicos dentro del rango para filtrar horarios relevantes
             List<int> daysInRange = new List<int>();
             for (DateTime d = fromDate; d <= toDate; d = d.AddDays(1))
                 daysInRange.Add((int)d.DayOfWeek);

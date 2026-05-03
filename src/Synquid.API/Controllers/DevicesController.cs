@@ -191,6 +191,7 @@ public class DevicesController : ControllerBase
 
             string apiKey = GenerateApiKey();
 
+            // guarda solo el hash, la key en claro solo se devuelve esta unica vez
             d.ApiKeyHash = BCrypt.Net.BCrypt.HashPassword(apiKey);
             await _context.SaveChangesAsync();
 
@@ -351,6 +352,7 @@ public class DevicesController : ControllerBase
 
     private string GenerateApiKey()
     {
+        // genera 32 bytes criptograficamente seguros y los convierte a base64
         byte[] bytes = new byte[32];
         RandomNumberGenerator rng = RandomNumberGenerator.Create();
         rng.GetBytes(bytes);

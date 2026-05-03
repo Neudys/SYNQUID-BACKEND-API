@@ -186,6 +186,7 @@ public class UserController : ControllerBase
             if (user == null)
                 return NotFound("Usuario no encontrado");
 
+            // verifica unicidad solo si el email cambio para evitar falso positivo con su propio email
             if (!string.IsNullOrEmpty(update.email) && update.email != user.Email)
             {
                 var emailExists = await _context.Users.FirstOrDefaultAsync(u => u.Email == update.email && u.Id != userId);
@@ -264,6 +265,7 @@ public class UserController : ControllerBase
             if (principal == null)
                 return Unauthorized("Token inválido o expirado");
 
+            // solo SuperAdmin (0) o Admin (1) pueden modificar roles
             string? roleStr = principal.FindFirst("role")?.Value;
             if (string.IsNullOrEmpty(roleStr) ||
                 !int.TryParse(roleStr, out var userRole) ||
@@ -371,6 +373,7 @@ public class UserController : ControllerBase
             if (nfcCard == null)
                 return NotFound("Tarjeta NFC no encontrada");
 
+            // permite reasignar al mismo usuario pero bloquea si ya la tiene otro
             if (nfcCard.UserId != null && nfcCard.UserId != userId)
                 return BadRequest("La tarjeta NFC ya está asignada a otro usuario");
 
