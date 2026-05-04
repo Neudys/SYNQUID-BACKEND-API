@@ -521,11 +521,37 @@ public class AttendanceController : ControllerBase
 
     [Authorize]
     [HttpGet("All")]
-    public async Task<ActionResult<List<AttendanceRecord>>> GetAll()
+    public async Task<ActionResult> GetAll([FromQuery] int page = 1, [FromQuery] int limit = 10)
     {
         try
         {
-            return await _context.AttendanceRecords.ToListAsync();
+            if (page < 1) page = 1;
+            if (limit < 1) limit = 10;
+
+            int totalCount = await _context.AttendanceRecords.CountAsync();
+
+            List<AttendanceRecord> records = await _context.AttendanceRecords
+                .Include(a => a.User)
+                .Include(a => a.Device)
+                .OrderByDescending(a => a.CreatedAt)
+                .Skip((page - 1) * limit)
+                .Take(limit)
+                .ToListAsync();
+
+            return Ok(new
+            {
+                records = records.Select(r => new
+                {
+                    id = r.Id,
+                    timestampUtc = r.TimestampUtc,
+                    user = r.User == null ? null : new { firstName = r.User.FirstName },
+                    device = r.Device == null ? null : new { name = r.Device.Name }
+                }),
+                total = totalCount,
+                totalPages = (int)Math.Ceiling((double)totalCount / limit),
+                page,
+                limit
+            });
         }
         catch (Exception ex)
         {
@@ -584,9 +610,12 @@ public class AttendanceController : ControllerBase
             ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
             if (principal == null) return Unauthorized("Token inválido");
 
-            string? professorIdStr = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-            if (!Guid.TryParse(professorIdStr, out var professorId))
+            string? callerIdStr = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+            if (!Guid.TryParse(callerIdStr, out var callerId))
                 return Unauthorized("Token no contiene un ID válido");
+
+            int.TryParse(principal.FindFirst("role")?.Value, out int callerRole);
+            bool isAdminOrAbove = callerRole <= 1; // 0=SuperAdmin, 1=Admin
 
             if (!Guid.TryParse(attendance.groupId, out var groupId))
                 return BadRequest("groupId no es un Guid válido");
@@ -598,8 +627,8 @@ public class AttendanceController : ControllerBase
                 .FirstOrDefaultAsync(g => g.Id == groupId && g.IsActive);
 
             if (group == null) return NotFound("Grupo no encontrado");
-            // solo el profesor dueno del grupo puede ver su historial
-            if (group.ProfessorId != professorId)
+            // admins y superadmins pueden ver cualquier grupo; profesores solo el suyo
+            if (!isAdminOrAbove && group.ProfessorId != callerId)
                 return Forbid();
 
             DateOnly fromDate = DateOnly.FromDateTime(attendance.from.Date);
@@ -741,9 +770,12 @@ public class AttendanceController : ControllerBase
             ClaimsPrincipal? principal = AuthenticationExtensions.ValidateTokenStatic(authHeader, _config);
             if (principal == null) return Unauthorized("Token inválido o expirado");
 
-            string? professorIdStr = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-            if (!Guid.TryParse(professorIdStr, out var professorId))
+            string? callerIdStr = principal.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+            if (!Guid.TryParse(callerIdStr, out var callerId))
                 return Unauthorized("Token no contiene un ID válido");
+
+            int.TryParse(principal.FindFirst("role")?.Value, out int callerRole);
+            bool isAdminOrAbove = callerRole <= 1; // 0=SuperAdmin, 1=Admin
 
             if (!Guid.TryParse(request.UserId, out var userId))
                 return BadRequest("userId inválido");
@@ -787,8 +819,8 @@ public class AttendanceController : ControllerBase
             }
 
             if (schedule == null) return NotFound("El grupo no tiene ningún horario activo");
-            // verifica que el profesor del token sea dueno del grupo
-            if (schedule.Group.ProfessorId != professorId) return Forbid();
+            // admins y superadmins pueden editar cualquier grupo; profesores solo el suyo
+            if (!isAdminOrAbove && schedule.Group.ProfessorId != callerId) return Forbid();
 
             User? student = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId && u.IsActive);
             if (student == null) return NotFound("Alumno no encontrado");
@@ -805,7 +837,7 @@ public class AttendanceController : ControllerBase
             if (existing != null)
             {
                 existing.Status = request.Status;
-                existing.ModifiedById = professorId;
+                existing.ModifiedById = callerId;
                 existing.UpdatedAt = DateTime.UtcNow;
             }
             else
@@ -818,7 +850,7 @@ public class AttendanceController : ControllerBase
                     GroupId = schedule.GroupId,
                     ProfessorId = schedule.Group.ProfessorId,
                     Status = request.Status,
-                    ModifiedById = professorId,
+                    ModifiedById = callerId,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
                 };
@@ -837,7 +869,7 @@ public class AttendanceController : ControllerBase
                 Status = request.Status,
                 NfcHash = null,
                 IsSynced = true,
-                RegisteredById = professorId,
+                RegisteredById = callerId,
                 CreatedAt = DateTime.UtcNow
             });
 
