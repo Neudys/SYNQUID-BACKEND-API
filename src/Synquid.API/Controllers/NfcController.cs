@@ -26,12 +26,33 @@ public class NfcController : ControllerBase
 
     [Authorize]
     [HttpGet]
-    public async Task<ActionResult<List<NfcCard>>> GetAll()
+    public async Task<ActionResult> GetAll()
     {
         try
         {
-            return await _context.NfcCards
+            var cards = await _context.NfcCards
+                .Include(c => c.User)
+                .ThenInclude(u => u.Institution)
                 .ToListAsync();
+
+            var result = cards.Select(c => new
+            {
+                c.Id,
+                c.HashUid,
+                c.IsActive,
+                c.CreatedAt,
+                c.UserId,
+                user = c.User == null ? null : new
+                {
+                    name = c.User.FirstName + " " + c.User.LastName
+                },
+                institution = c.User?.Institution == null ? null : new
+                {
+                    name = c.User.Institution.Name
+                }
+            });
+
+            return Ok(result);
         }
         catch (Exception ex)
         {
