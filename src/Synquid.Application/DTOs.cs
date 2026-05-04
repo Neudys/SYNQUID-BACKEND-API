@@ -12,8 +12,9 @@ public class UserResponseDto
     public bool IsActive { get; set; }
     public bool EmailVerified { get; set; }
     public Guid? InstitutionId { get; set; }
+    public string? InstitutionName { get; set; }
     public DateTime CreatedAt { get; set; }
-    public DateTime UpdatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
 
     public static UserResponseDto FromUser(User user)
     {
@@ -27,7 +28,9 @@ public class UserResponseDto
             IsActive = user.IsActive,
             EmailVerified = user.EmailVerified,
             InstitutionId = user.InstitutionId,
-            CreatedAt = user.CreatedAt
+            InstitutionName = user.Institution?.Name,
+            CreatedAt = user.CreatedAt,
+            UpdatedAt = user.UpdatedAt
         };
     }
 }

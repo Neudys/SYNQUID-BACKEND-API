@@ -104,28 +104,32 @@ public class UserController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<ActionResult<List<User>>> GetUsers([FromQuery] int page = 1)
+    public async Task<ActionResult> GetUsers([FromQuery] int page = 1, [FromQuery] int limit = 20)
     {
         try
         {
-            if (page < 1)
-                return BadRequest("El número de página debe ser mayor a 0");
-
-            List<User> usuarios = await _context.Users
-                .Where(u => u.IsActive)
-                .OrderBy(i => i.FirstName)
-                .Skip((page - 1) * 20)
-                .Take(20)
-                .ToListAsync();
+            if (page < 1) page = 1;
+            if (limit < 1) limit = 20;
 
             int total = await _context.Users.CountAsync(u => u.IsActive);
+
+            List<User> usuarios = await _context.Users
+                .Include(u => u.Institution)
+                .Where(u => u.IsActive)
+                .OrderBy(u => u.FirstName)
+                .ThenBy(u => u.LastName)
+                .Skip((page - 1) * limit)
+                .Take(limit)
+                .ToListAsync();
 
             return Ok(new
             {
                 codigoError = 0,
-                page = page,
+                page,
+                limit,
                 totalUsers = total,
-                users = usuarios,
+                totalPages = (int)Math.Ceiling((double)total / limit),
+                users = usuarios.Select(UserResponseDto.FromUser),
                 timestamp = DateTime.UtcNow
             });
         }
